@@ -1,0 +1,139 @@
+// Prisma schema per il quiz game
+// Usa SQLite per sviluppo, cambia provider in "postgresql" per produzione
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Categoria delle domande (Storia, Geografia, ecc.)
+model Category {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  slug      String     @unique
+  icon      String? // emoji o nome icona
+  color     String? // hex color per UI
+  questions Question[]
+  createdAt DateTime   @default(now())
+}
+
+// Domanda del quiz
+model Question {
+  id            String      @id @default(cuid())
+  text          String
+  type          String      @default("MULTIPLE_CHOICE") // MULTIPLE_CHOICE, OPEN_ANSWER, WORD_COMPLETION, IMAGE_GUESS
+  difficulty    String      @default("MEDIUM") // EASY, MEDIUM, HARD
+  timeLimit     Int         @default(20) // secondi
+  points        Int         @default(1000)
+  explanation   String? // spiegazione opzionale dopo la risposta
+  imageUrl      String? // URL immagine o video allegato alla domanda
+  mediaType     String? // "image" | "video" — tipo del media allegato
+  openAnswer    String? // risposta attesa per OPEN_ANSWER (confronto automatico case-insensitive)
+  wordTemplate  String? // template con _ per lettere mancanti (es. "M_L_NO")
+  categoryId    String
+  category      Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  answers       Answer[]
+  gameQuestions GameQuestion[]
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([categoryId, difficulty])
+  @@index([type])
+}
+
+// Risposte (4 per domanda, una sola corretta)
+model Answer {
+  id         String   @id @default(cuid())
+  text       String
+  isCorrect  Boolean  @default(false)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  order      Int      @default(0)
+  playerAnswers PlayerAnswer[]
+}
+
+// Partita in corso (una sessione di gioco con codice)
+model Game {
+  id            String       @id @default(cuid())
+  code          String       @unique // codice di 6 cifre per i player
+  status        String       @default("LOBBY") // LOBBY, PLAYING, FINISHED
+  hostName      String?
+  difficulty    String       @default("MEDIUM")
+  questionType  String       @default("MULTIPLE_CHOICE") // tipo domande selezionato dall'host
+  totalQuestions Int         @default(10)
+  currentIndex  Int          @default(0)
+  players       Player[]
+  gameQuestions GameQuestion[]
+  createdAt     DateTime     @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+
+  @@index([code])
+}
+
+// Domanda associata a una partita (con ordine)
+model GameQuestion {
+  id         String   @id @default(cuid())
+  gameId     String
+  game       Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id])
+  order      Int
+  askedAt    DateTime?
+  playerAnswers PlayerAnswer[]
+
+  @@unique([gameId, order])
+}
+
+// Giocatore in una partita
+model Player {
+  id         String   @id @default(cuid())
+  nickname   String
+  score      Int      @default(0)
+  emoji      String?
+  avatarUrl  String?
+  gameId     String
+  game       Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  socketId   String? // per reconnect
+  answers    PlayerAnswer[]
+  joinedAt   DateTime @default(now())
+
+  @@index([gameId])
+}
+
+// Risposta data da un player a una domanda
+model PlayerAnswer {
+  id             String       @id @default(cuid())
+  playerId       String
+  player         Player       @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  gameQuestionId String
+  gameQuestion   GameQuestion @relation(fields: [gameQuestionId], references: [id], onDelete: Cascade)
+  answerId       String?
+  answer         Answer?      @relation(fields: [answerId], references: [id])
+  answerText     String? // risposta testuale per OPEN_ANSWER, WORD_COMPLETION, IMAGE_GUESS
+  timeTaken      Int // millisecondi
+  pointsEarned   Int          @default(0)
+  isCorrect      Boolean      @default(false)
+  judged         Boolean      @default(false) // true quando admin ha giudicato (OPEN_ANSWER, IMAGE_GUESS)
+  answeredAt     DateTime     @default(now())
+
+  @@unique([playerId, gameQuestionId])
+}
+
+// Classifica globale (migliori punteggi di tutti i tempi)
+model Leaderboard {
+  id         String   @id @default(cuid())
+  nickname   String
+  score      Int
+  difficulty String
+  totalQuestions Int
+  correctAnswers Int
+  createdAt  DateTime @default(now())
+
+  @@index([score])
+  @@index([difficulty])
+}
