@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isAdmin } from "@/lib/admin-auth";
+import { Prisma } from "@prisma/client";
 
 export async function GET() {
   const categories = await prisma.category.findMany({
@@ -29,9 +30,10 @@ export async function POST(req: Request) {
     });
     return NextResponse.json({ category });
   } catch (e) {
-    return NextResponse.json(
-      { error: "Categoria già esistente" },
-      { status: 409 }
-    );
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return NextResponse.json({ error: "Categoria già esistente (nome o slug duplicato)" }, { status: 409 });
+    }
+    console.error("Errore creazione categoria:", e);
+    return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
   }
 }
