@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, Suspense } from "react";
 import Link from "next/link";
 import { QRCodeSVG } from "qrcode.react";
 import { useSocket } from "@/lib/useSocket";
@@ -13,7 +13,7 @@ const EMOJIS = [
   "🍕","🎵","🎯","🎲","🚀","🐉",
 ];
 
-export default function PlayerPage() {
+function PlayerContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { socket, isConnected } = useSocket();
@@ -242,5 +242,13 @@ export default function PlayerPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function PlayerPage() {
+  return (
+    <Suspense>
+      <PlayerContent />
+    </Suspense>
   );
 }
