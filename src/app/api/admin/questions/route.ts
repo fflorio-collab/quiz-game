@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isAdmin } from "@/lib/admin-auth";
+import { QUESTION_TYPE_META, type QuestionType } from "@/lib/questionTypes";
 import { z } from "zod";
 
 const MultipleChoiceSchema = z.object({
@@ -9,6 +10,7 @@ const MultipleChoiceSchema = z.object({
   difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
   timeLimit: z.number().int().min(5).max(60).default(20),
   categoryId: z.string(),
+  points: z.number().int().min(100).max(10000).default(1000),
   explanation: z.string().optional().nullable(),
   imageUrl: z.string().optional().nullable(),
   mediaType: z.string().optional().nullable(),
@@ -26,6 +28,7 @@ const OpenAnswerSchema = z.object({
   difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
   timeLimit: z.number().int().min(5).max(60).default(30),
   categoryId: z.string(),
+  points: z.number().int().min(100).max(10000).default(1000),
   explanation: z.string().optional().nullable(),
   openAnswer: z.string().optional().nullable(),
   imageUrl: z.string().optional().nullable(),
@@ -39,6 +42,7 @@ const WordCompletionSchema = z.object({
   difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
   timeLimit: z.number().int().min(5).max(60).default(20),
   categoryId: z.string(),
+  points: z.number().int().min(100).max(10000).default(1000),
   explanation: z.string().optional().nullable(),
   wordTemplate: z.string().min(1),
   answers: z
@@ -55,6 +59,7 @@ const ImageGuessSchema = z.object({
   difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
   timeLimit: z.number().int().min(5).max(60).default(30),
   categoryId: z.string(),
+  points: z.number().int().min(100).max(10000).default(1000),
   explanation: z.string().optional().nullable(),
   imageUrl: z.string().min(1),
   mediaType: z.string().optional().nullable(),
@@ -62,11 +67,78 @@ const ImageGuessSchema = z.object({
   answers: z.array(z.any()).optional(),
 });
 
+const GhigliottinaSchema = z.object({
+  text: z.string().min(3).max(500),
+  type: z.literal("GHIGLIOTTINA"),
+  difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
+  timeLimit: z.number().int().min(5).max(120).default(60),
+  categoryId: z.string(),
+  points: z.number().int().min(100).max(10000).default(1000),
+  explanation: z.string().optional().nullable(),
+  openAnswer: z.string().min(1),  // la parola da indovinare
+  imageUrl: z.string().optional().nullable(),
+  mediaType: z.string().optional().nullable(),
+  answers: z.array(z.any()).optional(),
+});
+
+// REACTION_CHAIN: 3 indizi progressivi + risposta attesa (auto-check)
+const ReactionChainSchema = z.object({
+  text: z.string().min(3).max(500),
+  type: z.literal("REACTION_CHAIN"),
+  difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
+  timeLimit: z.number().int().min(10).max(60).default(30),
+  categoryId: z.string(),
+  points: z.number().int().min(100).max(10000).default(1000),
+  explanation: z.string().optional().nullable(),
+  openAnswer: z.string().min(1),   // la parola corretta
+  imageUrl: z.string().optional().nullable(),
+  mediaType: z.string().optional().nullable(),
+  answers: z
+    .array(z.object({ text: z.string().min(1).max(200), isCorrect: z.boolean().optional() }))
+    .length(3, "Servono esattamente 3 indizi"),
+});
+
+// CLUE_REVEAL: immagine che si svela progressivamente (blur → nitida)
+const ClueRevealSchema = z.object({
+  text: z.string().min(3).max(500),
+  type: z.literal("CLUE_REVEAL"),
+  difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
+  timeLimit: z.number().int().min(10).max(60).default(30),
+  categoryId: z.string(),
+  points: z.number().int().min(100).max(10000).default(1000),
+  explanation: z.string().optional().nullable(),
+  openAnswer: z.string().min(1),
+  imageUrl: z.string().min(1),
+  mediaType: z.string().optional().nullable(),
+  answers: z.array(z.any()).optional(),
+});
+
+// ONLY_CONNECT: 4 elementi, link comune (admin giudica)
+const OnlyConnectSchema = z.object({
+  text: z.string().min(3).max(500),
+  type: z.literal("ONLY_CONNECT"),
+  difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
+  timeLimit: z.number().int().min(10).max(120).default(45),
+  categoryId: z.string(),
+  points: z.number().int().min(100).max(10000).default(1000),
+  explanation: z.string().optional().nullable(),
+  openAnswer: z.string().min(1),   // il link (riferimento per l'admin)
+  imageUrl: z.string().optional().nullable(),
+  mediaType: z.string().optional().nullable(),
+  answers: z
+    .array(z.object({ text: z.string().min(1).max(200), isCorrect: z.boolean().optional() }))
+    .length(4, "Servono esattamente 4 elementi"),
+});
+
 const QuestionSchema = z.discriminatedUnion("type", [
   MultipleChoiceSchema,
   OpenAnswerSchema,
   WordCompletionSchema,
   ImageGuessSchema,
+  GhigliottinaSchema,
+  ReactionChainSchema,
+  ClueRevealSchema,
+  OnlyConnectSchema,
 ]);
 
 export async function GET(req: Request) {
@@ -102,16 +174,17 @@ export async function POST(req: Request) {
   }
 
   const data = parsed.data;
+  const meta = QUESTION_TYPE_META[data.type as QuestionType];
 
-  if (data.type === "MULTIPLE_CHOICE" || data.type === "WORD_COMPLETION") {
-    const { answers, ...rest } = data;
+  if (meta.storedAnswers !== "none") {
+    const { answers, ...rest } = data as typeof data & { answers: { text: string; isCorrect?: boolean }[] };
     const question = await prisma.question.create({
       data: {
         ...rest,
         answers: {
-          create: (answers as { text: string; isCorrect: boolean }[]).map((a, i) => ({
+          create: answers.map((a, i) => ({
             text: a.text,
-            isCorrect: a.isCorrect,
+            isCorrect: a.isCorrect ?? false,
             order: i,
           })),
         },
@@ -121,7 +194,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ question });
   }
 
-  // OPEN_ANSWER / IMAGE_GUESS — nessuna risposta predefinita
+  // Tipi senza Answer[] in DB (OPEN_ANSWER, IMAGE_GUESS, GHIGLIOTTINA, CLUE_REVEAL)
   const { answers: _ignored, ...rest } = data as { answers?: unknown } & Record<string, unknown>;
   const question = await prisma.question.create({
     data: rest as Parameters<typeof prisma.question.create>[0]["data"],

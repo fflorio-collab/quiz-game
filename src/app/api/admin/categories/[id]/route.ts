@@ -9,18 +9,22 @@ export async function PUT(
   if (!isAdmin()) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const { name, slug, icon, color } = await req.json();
+  const { name, slug, icon, color, parentId } = await req.json();
   if (!name || !slug) {
     return NextResponse.json({ error: "name e slug sono obbligatori" }, { status: 400 });
+  }
+  // Impedisce che una categoria diventi figlia di se stessa
+  if (parentId && parentId === params.id) {
+    return NextResponse.json({ error: "Una categoria non può essere figlia di sé stessa" }, { status: 400 });
   }
   try {
     const category = await prisma.category.update({
       where: { id: params.id },
-      data: { name, slug, icon, color },
+      data: { name, slug, icon, color, parentId: parentId || null },
     });
     return NextResponse.json({ category });
   } catch {
-    return NextResponse.json({ error: "Nome o slug già in uso" }, { status: 409 });
+    return NextResponse.json({ error: "Slug già in uso" }, { status: 409 });
   }
 }
 

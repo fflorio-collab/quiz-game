@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -5,17 +7,31 @@
 @layer base {
   :root {
     color-scheme: dark;
+    --apple-bg: #000000;
+    --apple-surface: #1d1d1f;
+    --apple-surface-2: #2a2a2d;
+    --apple-border: rgba(255, 255, 255, 0.1);
+    --apple-muted: #a1a1a6;
+    --apple-blue: #2997ff;
+    --apple-blue-btn: #0071e3;
+    --apple-blue-btn-hover: #147ce5;
   }
 
   html,
   body {
-    @apply bg-background text-white;
+    background: var(--apple-bg);
+    color: #f5f5f7;
     font-family:
       "Inter",
       -apple-system,
       BlinkMacSystemFont,
-      "Segoe UI",
+      "SF Pro Display",
+      "SF Pro Text",
+      "Helvetica Neue",
       sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.003em;
   }
 
   * {
@@ -25,56 +41,97 @@
 
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-6 py-3
-           font-semibold transition-all duration-150
-           disabled:opacity-50 disabled:cursor-not-allowed
-           focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background;
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-6 py-3
+           font-medium text-[15px] transition-all duration-200
+           disabled:opacity-40 disabled:cursor-not-allowed
+           focus:outline-none;
+    letter-spacing: -0.01em;
   }
 
   .btn-primary {
-    @apply btn bg-accent text-white hover:bg-accent-hover
-           active:scale-[0.98];
+    @apply btn text-white;
+    background: var(--apple-blue-btn);
   }
+  .btn-primary:hover:not(:disabled) { background: var(--apple-blue-btn-hover); }
+  .btn-primary:active:not(:disabled) { background: #0062bd; }
 
   .btn-secondary {
-    @apply btn bg-surface text-white border border-border
-           hover:border-accent;
+    @apply btn text-white;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.4);
   }
 
   .btn-ghost {
     @apply btn text-muted hover:text-white;
+    background: transparent;
   }
 
   .input {
-    @apply w-full rounded-xl bg-surface border border-border px-4 py-3
-           text-white placeholder:text-muted
-           focus:outline-none focus:border-accent
-           transition-colors;
+    @apply w-full rounded-xl px-4 py-3 text-white placeholder:text-[#6e6e73]
+           focus:outline-none transition-all duration-200;
+    background: var(--apple-surface);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  .input:focus {
+    border-color: var(--apple-blue);
+    box-shadow: 0 0 0 3px rgba(41, 151, 255, 0.25);
   }
 
   .card {
-    @apply bg-surface border border-border rounded-2xl p-6;
+    @apply rounded-[22px] p-6;
+    background: var(--apple-surface);
+    border: 1px solid rgba(255, 255, 255, 0.06);
   }
 
   .answer-tile {
-    @apply relative overflow-hidden rounded-xl p-6 text-left text-lg font-medium
-           border-2 transition-all duration-150
-           hover:scale-[1.02] active:scale-[0.98]
-           disabled:cursor-not-allowed disabled:hover:scale-100;
+    @apply relative overflow-hidden rounded-2xl p-6 text-left text-lg font-medium
+           transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60;
+    background: var(--apple-surface);
+    border: 1px solid rgba(255, 255, 255, 0.08);
   }
+  .answer-tile:hover:not(:disabled) {
+    background: var(--apple-surface-2);
+    transform: scale(1.01);
+  }
+  .answer-tile:active:not(:disabled) { transform: scale(0.99); }
+
+  .neon-title {
+    font-family:
+      "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    color: #f5f5f7;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    filter: none;
+  }
+
+  .neon-border { border: 1px solid rgba(255, 255, 255, 0.12); }
+
+  .chip-gold {
+    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1
+           text-[11px] font-semibold uppercase tracking-[0.12em];
+    background: transparent;
+    color: var(--apple-blue);
+  }
+
+  /* Link Apple-style con freccia */
+  .apple-link {
+    @apply inline-flex items-center gap-1 font-medium;
+    color: var(--apple-blue);
+  }
+  .apple-link:hover { text-decoration: underline; }
 }
 
-/* Scrollbar custom */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  @apply bg-background;
-}
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #0a0a0b; }
 ::-webkit-scrollbar-thumb {
-  @apply bg-border rounded-full;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
 }
-::-webkit-scrollbar-thumb:hover {
-  @apply bg-accent;
-}
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }

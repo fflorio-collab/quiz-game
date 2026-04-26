@@ -76,28 +76,25 @@ function PlayerContent() {
       (res) => {
         setLoading(false);
         if ("error" in res) { setError(res.error); return; }
-        sessionStorage.setItem("playerId", res.playerId);
-        sessionStorage.setItem("playerGameId", res.gameId);
-        sessionStorage.setItem("playerNickname", nickname.trim());
-        sessionStorage.setItem("playerEmoji", selectedEmoji);
-        if (avatarUrl) sessionStorage.setItem("playerAvatarUrl", avatarUrl);
-        else sessionStorage.removeItem("playerAvatarUrl");
+        localStorage.setItem("playerId", res.playerId);
+        localStorage.setItem("playerGameId", res.gameId);
+        localStorage.setItem("playerGameCode", code.trim().toUpperCase());
+        localStorage.setItem("playerNickname", nickname.trim());
+        localStorage.setItem("playerEmoji", selectedEmoji);
+        if (avatarUrl) localStorage.setItem("playerAvatarUrl", avatarUrl);
+        else localStorage.removeItem("playerAvatarUrl");
         router.push(`/play/${res.gameId}`);
       }
     );
   };
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center p-4 relative overflow-hidden">
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-accent/5 rounded-full blur-3xl" />
-        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-purple-500/5 rounded-full blur-3xl" />
-      </div>
-
-      <div className="w-full max-w-md z-10">
-        <div className="text-center mb-6">
-          <h1 className="text-4xl font-bold mb-1">Area Giocatori</h1>
-          <p className="text-muted text-sm">Scegli il tuo look e unisciti alla partita</p>
+    <main className="min-h-screen flex flex-col items-center justify-center p-4">
+      <div className="w-full max-w-md">
+        <div className="text-center mb-8">
+          <div className="chip-gold mb-4 inline-flex">Giocatore</div>
+          <h1 className="text-4xl md:text-5xl font-semibold tracking-tight mb-2">Entra in scena.</h1>
+          <p className="text-muted">Scegli il tuo look e sali sul palco della serata.</p>
         </div>
 
         <div className="card animate-slide-up space-y-6">
@@ -107,7 +104,7 @@ function PlayerContent() {
               <button
                 type="button"
                 onClick={() => fileRef.current?.click()}
-                className="relative w-24 h-24 rounded-full border-4 border-border hover:border-accent transition-colors overflow-hidden flex items-center justify-center bg-surface"
+                className="relative w-24 h-24 rounded-full border border-white/10 hover:border-accent transition-colors overflow-hidden flex items-center justify-center bg-surface"
                 title="Carica foto"
               >
                 {avatarPreview ? (
@@ -165,8 +162,8 @@ function PlayerContent() {
                   onClick={() => setSelectedEmoji(em)}
                   className={`w-9 h-9 rounded-lg text-xl flex items-center justify-center transition-all ${
                     selectedEmoji === em
-                      ? "bg-accent/30 border-2 border-accent scale-110"
-                      : "hover:bg-surface border-2 border-transparent"
+                      ? "bg-accent/20 ring-2 ring-accent scale-110"
+                      : "hover:bg-white/5 ring-2 ring-transparent"
                   }`}
                 >
                   {em}
@@ -215,7 +212,7 @@ function PlayerContent() {
             disabled={loading || !isConnected || uploading}
             className="btn-primary w-full text-lg py-4"
           >
-            {loading ? "Accesso in corso..." : !isConnected ? "Connessione..." : "Entra nella partita"}
+            {loading ? "Accesso in corso..." : !isConnected ? "Connessione..." : "🎯 Entra in scena"}
           </button>
         </div>
 

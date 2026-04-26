@@ -17,7 +17,7 @@ export async function POST(req: Request) {
   if (!isAdmin()) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const { name, slug, icon, color } = await req.json();
+  const { name, slug, icon, color, parentId } = await req.json();
   if (!name || !slug) {
     return NextResponse.json(
       { error: "name e slug sono obbligatori" },
@@ -26,12 +26,12 @@ export async function POST(req: Request) {
   }
   try {
     const category = await prisma.category.create({
-      data: { name, slug, icon, color },
+      data: { name, slug, icon, color, parentId: parentId || null },
     });
     return NextResponse.json({ category });
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-      return NextResponse.json({ error: "Categoria già esistente (nome o slug duplicato)" }, { status: 409 });
+      return NextResponse.json({ error: "Slug già esistente" }, { status: 409 });
     }
     console.error("Errore creazione categoria:", e);
     return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });

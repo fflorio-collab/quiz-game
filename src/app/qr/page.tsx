@@ -17,18 +17,16 @@ export default function QrPage() {
   return (
     <main className="min-h-screen p-6 md:p-12">
       <div className="max-w-5xl mx-auto">
-        <div className="flex items-center justify-between mb-10">
+        <div className="flex items-end justify-between mb-12">
           <div>
-            <Link href="/" className="text-muted hover:text-white text-sm">
-              ← Home
+            <Link href="/" className="apple-link text-sm inline-flex mb-4">
+              ‹ Home
             </Link>
-            <h1 className="text-3xl font-bold mt-2">QR Code</h1>
-            <p className="text-muted mt-1">Accesso rapido alle aree del gioco</p>
+            <p className="chip-gold mb-2 inline-flex">Accesso rapido</p>
+            <h1 className="text-4xl md:text-5xl font-semibold tracking-tight">QR Code.</h1>
+            <p className="text-muted mt-2">Stampa, proietta, condividi.</p>
           </div>
-          <button
-            onClick={() => window.print()}
-            className="btn-secondary"
-          >
+          <button onClick={() => window.print()} className="btn-secondary">
             Stampa
           </button>
         </div>

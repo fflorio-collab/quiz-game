@@ -37,3 +37,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# editor
+/.vscode/
+
+# user-uploaded files (lost on Railway redeploy anyway, use Cloudinary in prod)
+/public/uploads/

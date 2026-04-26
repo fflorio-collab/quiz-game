@@ -14,9 +14,24 @@ Built with **Next.js 14 · TypeScript · Tailwind · Socket.io · Prisma · SQLi
 - ⏱️ **Timer real-time** e punteggi in base a velocità di risposta
 - 📊 **Classifica globale** persistente per ogni difficoltà
 - 🎚️ **3 livelli di difficoltà** (Facile / Medio / Difficile)
-- 🗂️ **Categorie miste**: Storia, Geografia, Scienza, Arte, Sport, Cinema
+- 🗂️ **Categorie gerarchiche**: root + sotto-categorie (es. Storia → Storia Antica / 5 elementare)
+- 📝 **Scelta manuale domande**: l'host può spuntare le domande esatte da usare, anche per-round in torneo
+- 📥 **Bulk import JSON** dal pannello admin per popolare una libreria quasi infinita
+- 🧑 **Account persistenti** (email/password): XP, livello, 10 badge, daily streak, storico partite in `/profile`
+- 💳 **Piani Free / Pro / Edu** con Stripe stub pronto in `/pricing`
+- 📣 **Modalità presentatore + Spettatore** per tavoli senza dispositivi
+- 🎯 **Modalità speciali**: Ultimo in piedi, Caduta libera, Speedrun, Jeopardy, Scegli categoria
 - ⚙️ **Pannello admin** protetto da password per gestire le domande
 - 🔊 **Effetti sonori** (opzionali, vedi sezione Audio)
+
+## Troubleshooting
+
+Se dopo molti hot-reload la pagina appare senza CSS o con "missing required error components":
+```
+# Ctrl+C nel terminale di `npm run dev`
+rm -rf .next
+npm run dev
+```
 
 ## Struttura del progetto
 

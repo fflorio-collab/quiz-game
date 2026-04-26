@@ -43,9 +43,10 @@ function JoinContent() {
           setError(res.error);
           return;
         }
-        sessionStorage.setItem("playerId", res.playerId);
-        sessionStorage.setItem("playerGameId", res.gameId);
-        sessionStorage.setItem("playerNickname", nickname.trim());
+        localStorage.setItem("playerId", res.playerId);
+        localStorage.setItem("playerGameId", res.gameId);
+        localStorage.setItem("playerGameCode", code.trim().toUpperCase());
+        localStorage.setItem("playerNickname", nickname.trim());
         router.push(`/play/${res.gameId}`);
       }
     );
@@ -54,15 +55,12 @@ function JoinContent() {
   return (
     <main className="min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        <Link
-          href="/"
-          className="text-muted hover:text-white text-sm mb-6 inline-block"
-        >
-          ← Home
+        <Link href="/" className="apple-link text-sm mb-6 inline-flex">
+          ‹ Home
         </Link>
 
-        <div className="card animate-slide-up">
-          <h1 className="text-3xl font-bold mb-2">Entra nella partita</h1>
+        <div className="card">
+          <h1 className="text-3xl md:text-4xl font-semibold tracking-tight mb-2">Entra nella partita.</h1>
           <p className="text-muted mb-6">
             Inserisci il codice ricevuto dall&apos;host e scegli un nickname.
           </p>
