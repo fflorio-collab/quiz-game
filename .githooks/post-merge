@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Post-merge: dopo `git pull` o `git merge`, se schema.prisma è cambiato:
+# - rigenera il client Prisma
+# - sincronizza il DB locale (sqlite) con il nuovo schema
+# Evita di lasciare il dev server con un client incoerente.
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Rileva se schema.prisma è stato modificato dal merge
+if git diff-tree -r --name-only --no-commit-id ORIG_HEAD HEAD | grep -q "^prisma/schema.prisma$"; then
+  echo ""
+  echo "🔄 prisma/schema.prisma è cambiato — rigenero client e sincronizzo DB locale..."
+  npx prisma generate >/dev/null 2>&1 || { echo "⚠️  prisma generate fallito"; exit 0; }
+  npx prisma db push --skip-generate --accept-data-loss >/dev/null 2>&1 || echo "⚠️  prisma db push fallito (potrebbe servire migrazione manuale)"
+  echo "✓ Client Prisma rigenerato e DB locale sincronizzato."
+  echo "  Riavvia 'npm run dev' se è attivo (Next.js non ricarica il client a caldo)."
+fi
+
+exit 0

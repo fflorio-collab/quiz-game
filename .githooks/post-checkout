@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Post-checkout: dopo un cambio branch (es. `git checkout`), se schema.prisma
+# differisce, rigenera il client e sincronizza il DB locale.
+# I 3 argomenti sono: $1=prevHEAD $2=newHEAD $3=branchFlag (1 se cambio branch, 0 se file)
+
+prev_head="$1"
+new_head="$2"
+branch_flag="$3"
+
+# Esegui solo per cambi di branch (non per checkout di singoli file)
+[ "$branch_flag" = "1" ] || exit 0
+[ "$prev_head" = "$new_head" ] && exit 0
+
+cd "$(git rev-parse --show-toplevel)"
+
+if git diff-tree -r --name-only --no-commit-id "$prev_head" "$new_head" | grep -q "^prisma/schema.prisma$"; then
+  echo ""
+  echo "🔄 prisma/schema.prisma è cambiato — rigenero client e sincronizzo DB locale..."
+  npx prisma generate >/dev/null 2>&1 || { echo "⚠️  prisma generate fallito"; exit 0; }
+  npx prisma db push --skip-generate --accept-data-loss >/dev/null 2>&1 || echo "⚠️  prisma db push fallito"
+  echo "✓ Client Prisma rigenerato e DB locale sincronizzato."
+  echo "  Riavvia 'npm run dev' se è attivo."
+fi
+
+exit 0

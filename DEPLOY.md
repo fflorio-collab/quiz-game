@@ -81,4 +81,27 @@ npx tsx prisma/seed.ts   # opzionale: popola le domande iniziali
 ## Note importanti
 
 - **Immagini caricate**: Railway usa filesystem effimero — le immagini in `public/uploads` vengono perse al redeploy. Per produzione usa Cloudinary o S3.
-- **Dev locale**: dopo aver cambiato schema a PostgreSQL, imposta un `DATABASE_URL` PostgreSQL locale nel file `.env` oppure usa `railway run npm run db:push` per connetterti direttamente al DB di Railway.
+- **Dev locale**: il dev usa SQLite (`.env` con `DATABASE_URL=file:./dev.db`), Railway usa PostgreSQL (env var iniettata da Railway). I due schemi sono [prisma/schema.prisma](./prisma/schema.prisma) (sqlite) e [prisma/schema.production.prisma](./prisma/schema.production.prisma) (postgresql).
+
+---
+
+## Sync schemi & git hooks
+
+I due schemi devono restare allineati (solo il `provider` cambia). Sono presenti automatismi:
+
+### Hook git (attivi via `core.hooksPath = .githooks`)
+- `.githooks/pre-push` — blocca push se `schema.production.prisma` non è in sync con `schema.prisma`. Esegue il sync automatico e ti dice di committare.
+- `.githooks/post-merge` e `.githooks/post-checkout` — dopo `git pull` o `git checkout`, se `schema.prisma` è cambiato, rigenera il client Prisma e fa `prisma db push` sul DB locale. Ti ricorda di riavviare `npm run dev`.
+
+### Comandi npm
+- `npm run prisma:sync-prod` — sincronizza `schema.production.prisma` da `schema.prisma`.
+- `npm run db:refresh` — sync prod schema + `prisma generate` + `prisma db push` (fix manuale completo se i hook non bastano).
+- `npm run hooks:install` — riattiva i git hook (utile dopo un clone fresco).
+
+### Dopo un fresh clone
+```bash
+npm install
+npm run hooks:install   # attiva i git hook
+npm run db:refresh      # sync schema + genera client + crea dev.db
+npm run db:seed         # popola con domande
+```

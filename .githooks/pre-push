@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Pre-push: assicura che schema.production.prisma sia allineato a schema.prisma
+# prima di pubblicare modifiche su GitHub (e quindi su Railway).
+
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+
+if ! node scripts/sync-prod-schema.mjs --check; then
+  echo ""
+  echo "⛔  Push bloccato: schema.production.prisma è fuori sync con schema.prisma."
+  echo ""
+  echo "Sincronizzo automaticamente..."
+  node scripts/sync-prod-schema.mjs
+  echo ""
+  echo "✓ Aggiornato. Ora committa il cambio e ripushaa:"
+  echo "    git add prisma/schema.production.prisma"
+  echo "    git commit -m 'chore: sync prod schema'"
+  echo "    git push"
+  exit 1
+fi
+
+exit 0
