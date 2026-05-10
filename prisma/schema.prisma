@@ -40,8 +40,10 @@ model User {
   sessions      Session[]
   // Relazioni gioco
   players       Player[]
+  spectators    Spectator[]
   leaderboards  Leaderboard[]
   badges        UserBadge[]
+  packs         QuestionPack[] @relation("UserPacks")
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -131,7 +133,7 @@ model Question {
   type          String      @default("MULTIPLE_CHOICE") // MULTIPLE_CHOICE, OPEN_ANSWER, WORD_COMPLETION, IMAGE_GUESS
   difficulty    String      @default("MEDIUM") // EASY, MEDIUM, HARD
   timeLimit     Int         @default(20) // secondi
-  points        Int         @default(1000)
+  points        Int         @default(100)
   explanation   String? // spiegazione opzionale dopo la risposta
   imageUrl      String? // URL immagine o video allegato alla domanda
   mediaType     String? // "image" | "video" — tipo del media allegato
@@ -141,11 +143,48 @@ model Question {
   category      Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   answers       Answer[]
   gameQuestions GameQuestion[]
+  packs         QuestionInPack[]
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
   @@index([categoryId, difficulty])
   @@index([type])
+}
+
+// Pack di domande ("macro categoria"): collezione curata di domande per un evento o tema
+// specifico (es. "Torneo del 11/05"). Una domanda può stare in più pack e resta sempre
+// visibile nel DB generale tramite il filtro categoria standard.
+// Workflow "build mode": l'host entra in un pack e ogni domanda creata viene auto-aggiunta.
+model QuestionPack {
+  id          String           @id @default(cuid())
+  name        String
+  slug        String           @unique
+  description String?
+  eventDate   DateTime?
+  color       String?
+  icon        String?
+  coverUrl    String?
+  isPublic    Boolean          @default(false) // false = visibile solo al creatore; true = a tutti
+  creatorId   String?
+  creator     User?            @relation("UserPacks", fields: [creatorId], references: [id], onDelete: SetNull)
+  questions   QuestionInPack[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([creatorId])
+  @@index([isPublic])
+}
+
+// Join M:N tra Pack e Question. Una domanda può stare in più pack e in nessuno.
+model QuestionInPack {
+  packId     String
+  pack       QuestionPack @relation(fields: [packId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question     @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  addedAt    DateTime     @default(now())
+
+  @@id([packId, questionId])
+  @@index([questionId])
 }
 
 // Risposte (4 per domanda, una sola corretta)
@@ -187,15 +226,49 @@ model Game {
   tournamentCategoryIds String?
   // Se true: prima di ogni domanda l'host sceglie una CATEGORIA dalla griglia (categorie con rimanenti > 0).
   categoryPickMode Boolean   @default(false)
+  // Configurazione torneo "moderna" (sostituisce i CSV qui sopra per i tornei nuovi).
+  // JSON serializzato: array di RoundConfig (vedi src/lib/roundsConfig.ts per il tipo).
+  // Quando popolato, ha precedenza sui CSV. I CSV restano per retrocompatibilità delle partite vecchie.
+  roundsConfig  String?
+  // Modalità di gioco di base (per partita singola; nel torneo ogni round può overridarla via roundsConfig).
+  // FREE_FOR_ALL = tutti rispondono insieme (richiede dispositivi). TURN_BASED = a turni.
+  playMode      String       @default("FREE_FOR_ALL")
+  // Ordine dei turni: CSV di Player.id. Generato casualmente alla prima partita,
+  // modificabile dall'host pre-start. Resta fisso per tutta la partita.
+  turnOrder     String?
+  // Se true: in TURN_BASED, se il primo player sbaglia, la stessa domanda passa al successivo.
+  passOnWrong   Boolean      @default(false)
   totalQuestions Int         @default(10)
   currentIndex  Int          @default(0)
   players       Player[]
+  spectators    Spectator[]
   gameQuestions GameQuestion[]
   createdAt     DateTime     @default(now())
   startedAt     DateTime?
   finishedAt    DateTime?
 
   @@index([code])
+}
+
+// Spettatore con dispositivo. Ruolo separato dai Player: vede tutto tranne le risposte
+// degli altri prima della rivelazione, può mandare reazioni emoji, non risponde, non
+// è in classifica. Solo utenti registrati (userId obbligatorio). Limite: nessuno.
+// La distinzione player/spettatore viene decisa all'ingresso e non cambia in corsa.
+model Spectator {
+  id         String   @id @default(cuid())
+  nickname   String
+  emoji      String?
+  avatarUrl  String?
+  gameId     String
+  game       Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  socketId   String?  // per reconnect
+  userId     String   // spettatori sono SOLO utenti registrati
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt   DateTime @default(now())
+
+  @@unique([gameId, userId]) // un utente entra come spettatore al massimo una volta per partita
+  @@index([gameId])
+  @@index([userId])
 }
 
 // Domanda associata a una partita (con ordine)

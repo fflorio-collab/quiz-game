@@ -43,6 +43,22 @@ export type DisplayAnswers =
   | "ordered"    // mantenere Answer.order (REACTION_CHAIN, ONLY_CONNECT)
   | "hidden";    // non inviate al client (OPEN_ANSWER, WORD_COMPLETION, ...)
 
+// Compatibilità tipo × opzione di gioco.
+// L'unica fonte di verità: UI host e validazione server-side derivano da qui.
+// Aggiungere un'opzione globale = aggiungere un campo qui + filtrare in UI/server.
+export interface QuestionTypeCompat {
+  speedrun: boolean;        // timer globale a domande rapide
+  fiftyFifty: boolean;      // aiuto 50/50 (solo MULTIPLE_CHOICE)
+  skip: boolean;            // aiuto Salto
+  lives: boolean;           // "Caduta libera" (errori tollerati)
+  lastManStanding: boolean; // "Ultimo in piedi" (errore = eliminato)
+  categoryPick: boolean;    // host sceglie la categoria pre-domanda
+  jeopardy: boolean;        // griglia Jeopardy/Rischiatutto (solo OPEN_ANSWER)
+  turnBased: boolean;       // a turni, un player risponde alla volta
+  freeForAll: boolean;      // tutti rispondono insieme
+  localPartyMode: boolean;  // modalità presentatore (no dispositivi)
+}
+
 export interface QuestionTypeMeta {
   type: QuestionType;
   label: string;
@@ -67,7 +83,22 @@ export interface QuestionTypeMeta {
 
   // Default
   defaultTimeLimit: number;             // secondi
+  defaultPointsExact: number;           // punti per risposta corretta (default globale: 100)
+  defaultPointsWrong: number;           // punti per risposta sbagliata (default globale: 0)
+  // Per Ghigliottina: bonus al vincitore (default 1000, configurabile dall'host).
+  // null per gli altri tipi.
+  defaultWinnerBonus: number | null;
+
+  // Compatibilità con opzioni globali
+  compat: QuestionTypeCompat;
 }
+
+// Default punti globali — confermati con KING (10/05/2026):
+// 100 punti per risposta esatta, 0 per risposta sbagliata.
+// Ghigliottina ha un bonus al vincitore di 1000 di default (configurabile dall'host volta per volta).
+// Jeopardy non usa questi default: il valore della cella scelta dal player è la fonte di verità.
+const DEFAULT_POINTS_EXACT = 100;
+const DEFAULT_POINTS_WRONG = 0;
 
 export const QUESTION_TYPE_META: Record<QuestionType, QuestionTypeMeta> = {
   MULTIPLE_CHOICE: {
@@ -84,6 +115,21 @@ export const QUESTION_TYPE_META: Record<QuestionType, QuestionTypeMeta> = {
     requiresMedia: false,
     displayAnswers: "shuffled",
     defaultTimeLimit: 20,
+    defaultPointsExact: DEFAULT_POINTS_EXACT,
+    defaultPointsWrong: DEFAULT_POINTS_WRONG,
+    defaultWinnerBonus: null,
+    compat: {
+      speedrun: true,
+      fiftyFifty: true,        // unica modalità che ammette 50/50
+      skip: true,
+      lives: true,
+      lastManStanding: true,
+      categoryPick: true,
+      jeopardy: false,         // Jeopardy è solo OPEN_ANSWER
+      turnBased: true,
+      freeForAll: true,
+      localPartyMode: true,
+    },
   },
   OPEN_ANSWER: {
     type: "OPEN_ANSWER",
@@ -99,6 +145,21 @@ export const QUESTION_TYPE_META: Record<QuestionType, QuestionTypeMeta> = {
     requiresMedia: false,
     displayAnswers: "hidden",
     defaultTimeLimit: 30,
+    defaultPointsExact: DEFAULT_POINTS_EXACT,
+    defaultPointsWrong: DEFAULT_POINTS_WRONG,
+    defaultWinnerBonus: null,
+    compat: {
+      speedrun: true,          // host giudica al volo (UX nota: ritmo serrato)
+      fiftyFifty: false,
+      skip: true,
+      lives: true,
+      lastManStanding: true,
+      categoryPick: true,
+      jeopardy: true,          // unica modalità che ammette Jeopardy
+      turnBased: true,
+      freeForAll: true,
+      localPartyMode: true,
+    },
   },
   WORD_COMPLETION: {
     type: "WORD_COMPLETION",
@@ -114,6 +175,21 @@ export const QUESTION_TYPE_META: Record<QuestionType, QuestionTypeMeta> = {
     requiresMedia: false,
     displayAnswers: "hidden",
     defaultTimeLimit: 20,
+    defaultPointsExact: DEFAULT_POINTS_EXACT,
+    defaultPointsWrong: DEFAULT_POINTS_WRONG,
+    defaultWinnerBonus: null,
+    compat: {
+      speedrun: true,
+      fiftyFifty: false,
+      skip: true,
+      lives: true,
+      lastManStanding: true,
+      categoryPick: true,
+      jeopardy: false,
+      turnBased: true,
+      freeForAll: true,
+      localPartyMode: true,
+    },
   },
   IMAGE_GUESS: {
     type: "IMAGE_GUESS",
@@ -129,12 +205,27 @@ export const QUESTION_TYPE_META: Record<QuestionType, QuestionTypeMeta> = {
     requiresMedia: true,
     displayAnswers: "hidden",
     defaultTimeLimit: 30,
+    defaultPointsExact: DEFAULT_POINTS_EXACT,
+    defaultPointsWrong: DEFAULT_POINTS_WRONG,
+    defaultWinnerBonus: null,
+    compat: {
+      speedrun: true,
+      fiftyFifty: false,
+      skip: true,
+      lives: true,
+      lastManStanding: true,
+      categoryPick: true,
+      jeopardy: false,
+      turnBased: true,
+      freeForAll: true,
+      localPartyMode: true,
+    },
   },
   GHIGLIOTTINA: {
     type: "GHIGLIOTTINA",
     label: "Ghigliottina",
     icon: "🎯",
-    description: "Sfida gli ultimi in classifica",
+    description: "Indovina la parola che lega gli indizi. Vincitore: +1000 punti (default).",
     requiresJudging: true,
     autoCheck: null,
     answerInput: "text",
@@ -144,6 +235,21 @@ export const QUESTION_TYPE_META: Record<QuestionType, QuestionTypeMeta> = {
     requiresMedia: false,
     displayAnswers: "hidden",
     defaultTimeLimit: 60,
+    defaultPointsExact: 0,         // la Ghigliottina non usa il punteggio per-domanda
+    defaultPointsWrong: 0,
+    defaultWinnerBonus: 1000,      // bonus al vincitore (configurabile dall'host)
+    compat: {
+      speedrun: false,             // formato pacato, niente speedrun
+      fiftyFifty: false,
+      skip: false,
+      lives: false,
+      lastManStanding: false,
+      categoryPick: false,
+      jeopardy: false,
+      turnBased: true,             // tipicamente uno alla volta
+      freeForAll: true,            // ma si può anche giocare tutti insieme con scommessa
+      localPartyMode: true,
+    },
   },
   REACTION_CHAIN: {
     type: "REACTION_CHAIN",
@@ -159,6 +265,21 @@ export const QUESTION_TYPE_META: Record<QuestionType, QuestionTypeMeta> = {
     requiresMedia: false,
     displayAnswers: "ordered",
     defaultTimeLimit: 30,
+    defaultPointsExact: DEFAULT_POINTS_EXACT,
+    defaultPointsWrong: DEFAULT_POINTS_WRONG,
+    defaultWinnerBonus: null,
+    compat: {
+      speedrun: true,
+      fiftyFifty: false,
+      skip: true,
+      lives: true,
+      lastManStanding: true,
+      categoryPick: true,
+      jeopardy: false,
+      turnBased: true,
+      freeForAll: true,
+      localPartyMode: true,
+    },
   },
   CLUE_REVEAL: {
     type: "CLUE_REVEAL",
@@ -174,6 +295,21 @@ export const QUESTION_TYPE_META: Record<QuestionType, QuestionTypeMeta> = {
     requiresMedia: true,
     displayAnswers: "hidden",
     defaultTimeLimit: 30,
+    defaultPointsExact: DEFAULT_POINTS_EXACT,
+    defaultPointsWrong: DEFAULT_POINTS_WRONG,
+    defaultWinnerBonus: null,
+    compat: {
+      speedrun: true,
+      fiftyFifty: false,
+      skip: true,
+      lives: true,
+      lastManStanding: true,
+      categoryPick: true,
+      jeopardy: false,
+      turnBased: true,
+      freeForAll: true,
+      localPartyMode: true,
+    },
   },
   ONLY_CONNECT: {
     type: "ONLY_CONNECT",
@@ -189,6 +325,21 @@ export const QUESTION_TYPE_META: Record<QuestionType, QuestionTypeMeta> = {
     requiresMedia: false,
     displayAnswers: "ordered",
     defaultTimeLimit: 45,
+    defaultPointsExact: DEFAULT_POINTS_EXACT,
+    defaultPointsWrong: DEFAULT_POINTS_WRONG,
+    defaultWinnerBonus: null,
+    compat: {
+      speedrun: true,
+      fiftyFifty: false,
+      skip: true,
+      lives: true,
+      lastManStanding: true,
+      categoryPick: true,
+      jeopardy: false,
+      turnBased: true,
+      freeForAll: true,
+      localPartyMode: true,
+    },
   },
 };
 
@@ -228,4 +379,58 @@ export function expectedAnswersCount(type: QuestionType): { min: number; max: nu
     case "none":
       return null;
   }
+}
+
+// Helper di interrogazione della capability matrix.
+// Usali in UI (per mostrare/nascondere opzioni) e in validazione server (per rifiutare config invalide).
+
+export type GameOptionKey = keyof QuestionTypeCompat;
+
+export function supports(type: QuestionType, option: GameOptionKey): boolean {
+  return QUESTION_TYPE_META[type].compat[option];
+}
+
+// Una config (set di opzioni) è valida per un tipo se tutte le opzioni attive sono supportate.
+// `activeOptions` è la lista delle opzioni globali abilitate dall'host (quelle false non vengono valutate).
+export function validateConfig(
+  type: QuestionType,
+  activeOptions: Partial<Record<GameOptionKey, boolean>>
+): { ok: true } | { ok: false; incompatible: GameOptionKey[] } {
+  const compat = QUESTION_TYPE_META[type].compat;
+  const incompatible: GameOptionKey[] = [];
+  for (const [key, active] of Object.entries(activeOptions) as [GameOptionKey, boolean][]) {
+    if (active && !compat[key]) incompatible.push(key);
+  }
+  return incompatible.length === 0 ? { ok: true } : { ok: false, incompatible };
+}
+
+// Per un torneo multi-round: l'opzione globale è ammessa solo se TUTTI i tipi dei round la supportano.
+// Esempio: speedrun globale + un round Ghigliottina → speedrun va bloccato.
+export function commonCompat(types: QuestionType[]): QuestionTypeCompat {
+  const result: QuestionTypeCompat = {
+    speedrun: true, fiftyFifty: true, skip: true, lives: true, lastManStanding: true,
+    categoryPick: true, jeopardy: true, turnBased: true, freeForAll: true, localPartyMode: true,
+  };
+  for (const t of types) {
+    const c = QUESTION_TYPE_META[t].compat;
+    (Object.keys(result) as GameOptionKey[]).forEach((k) => {
+      result[k] = result[k] && c[k];
+    });
+  }
+  return result;
+}
+
+// Tipi di domanda compatibili con un'opzione data — utile per popolare dropdown filtrati.
+export function typesSupporting(option: GameOptionKey): QuestionType[] {
+  return QUESTION_TYPES.filter((t) => QUESTION_TYPE_META[t].compat[option]);
+}
+
+// Default punti per la creazione di una nuova Question (usato dall'admin form).
+export function defaultPointsForType(type: QuestionType): number {
+  return QUESTION_TYPE_META[type].defaultPointsExact;
+}
+
+// Bonus al vincitore per Ghigliottina (null = non applicabile).
+export function winnerBonusForType(type: QuestionType): number | null {
+  return QUESTION_TYPE_META[type].defaultWinnerBonus;
 }

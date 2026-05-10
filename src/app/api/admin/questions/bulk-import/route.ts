@@ -24,7 +24,7 @@ const QuestionSchema = z.object({
   ]),
   difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).default("MEDIUM"),
   timeLimit: z.number().int().min(0).max(300).default(20),
-  points: z.number().int().min(0).default(1000),
+  points: z.number().int().min(0).default(100),
   explanation: z.string().optional().nullable(),
   imageUrl: z.string().optional().nullable(),
   mediaType: z.string().optional().nullable(),

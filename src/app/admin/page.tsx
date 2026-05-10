@@ -37,7 +37,22 @@ type Question = {
   answers: { id: string; text: string; isCorrect: boolean; order: number }[];
 };
 
-type Tab = "questions" | "categories" | "import";
+type Tab = "questions" | "categories" | "packs" | "import";
+
+type Pack = {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  eventDate?: string | null;
+  color?: string | null;
+  icon?: string | null;
+  coverUrl?: string | null;
+  isPublic: boolean;
+  creatorId?: string | null;
+  creator?: { id: string; username: string | null; displayName: string | null } | null;
+  _count?: { questions: number };
+};
 
 function slugify(name: string) {
   return name
@@ -58,9 +73,29 @@ export default function AdminPage() {
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
+  const [packs, setPacks] = useState<Pack[]>([]);
   const [filterCategory, setFilterCategory] = useState("");
   const [filterDifficulty, setFilterDifficulty] = useState("");
   const [filterType, setFilterType] = useState("");
+  // Filtro pack: "" = tutti · "any" = in qualsiasi pack · "none" = in nessun pack · "<id>" = pack specifico
+  const [filterPack, setFilterPack] = useState("");
+
+  // Build mode: quando attivo, ogni nuova domanda creata viene auto-aggiunta al pack indicato.
+  // null = build mode disattivo (modalità DB generale).
+  const [buildPackId, setBuildPackId] = useState<string | null>(null);
+  const buildingPack = packs.find((p) => p.id === buildPackId) ?? null;
+
+  // Pack form state
+  const [showPackForm, setShowPackForm] = useState(false);
+  const [packEditId, setPackEditId] = useState<string | null>(null);
+  const [packName, setPackName] = useState("");
+  const [packSlug, setPackSlug] = useState("");
+  const [packDescription, setPackDescription] = useState("");
+  const [packEventDate, setPackEventDate] = useState("");
+  const [packColor, setPackColor] = useState("#a855f7");
+  const [packIcon, setPackIcon] = useState("📦");
+  const [packIsPublic, setPackIsPublic] = useState(false);
+  const [packError, setPackError] = useState("");
 
   // Question form state
   const [showQForm, setShowQForm] = useState(false);
@@ -75,8 +110,8 @@ export default function AdminPage() {
   const [qCategory, setQCategory] = useState("");
   const [qDifficulty, setQDifficulty] = useState<"EASY" | "MEDIUM" | "HARD">("MEDIUM");
   const [qTimeLimit, setQTimeLimit] = useState(20);
-  // Punti base: default 1000. In Jeopardy è anche il valore cella.
-  const [qPoints, setQPoints] = useState(1000);
+  // Punti base: default 100. In Jeopardy è anche il valore cella (configurato a parte).
+  const [qPoints, setQPoints] = useState(100);
   const [qAnswers, setQAnswers] = useState([
     { text: "", isCorrect: true },
     { text: "", isCorrect: false },
@@ -116,16 +151,32 @@ export default function AdminPage() {
   };
 
   const loadData = async () => {
-    const [cRes, qRes] = await Promise.all([
+    // Filtri pack tradotti in query string sull'API.
+    const qsParts: string[] = [];
+    if (filterPack === "any") qsParts.push("inAnyPack=true");
+    else if (filterPack === "none") qsParts.push("notInPack=true");
+    else if (filterPack) qsParts.push(`inPack=${encodeURIComponent(filterPack)}`);
+    const qs = qsParts.length ? `?${qsParts.join("&")}` : "";
+
+    const [cRes, qRes, pRes] = await Promise.all([
       fetch("/api/admin/categories"),
-      fetch("/api/admin/questions"),
+      fetch(`/api/admin/questions${qs}`),
+      fetch("/api/admin/packs"),
     ]);
     const cData = await cRes.json();
     const qData = await qRes.json();
+    const pData = pRes.ok ? await pRes.json() : { packs: [] };
     setCategories(cData.categories);
     setQuestions(qData.questions);
+    setPacks(pData.packs ?? []);
     if (cData.categories[0] && !qCategory) setQCategory(cData.categories[0].id);
   };
+
+  // Ricarica le domande quando cambia il filtro pack (gli altri filtri sono client-side già).
+  useEffect(() => {
+    if (authed) loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterPack]);
 
   useEffect(() => {
     setAdminUrl(window.location.origin + "/admin");
@@ -246,7 +297,10 @@ export default function AdminPage() {
       body.answers = qItems.map((x) => ({ text: x.trim(), isCorrect: false }));
     } else body.openAnswer = qOpenAnswer.trim() || null;
 
-    const url = qEditId ? `/api/admin/questions/${qEditId}` : "/api/admin/questions";
+    // Build mode: se attivo e stiamo CREANDO una domanda (non edit), passo packId in query string
+    // così l'API la auto-attacca al pack senza che l'utente debba selezionarlo ogni volta.
+    const buildQs = !qEditId && buildPackId ? `?packId=${encodeURIComponent(buildPackId)}` : "";
+    const url = qEditId ? `/api/admin/questions/${qEditId}` : `/api/admin/questions${buildQs}`;
     const method = qEditId ? "PUT" : "POST";
     const res = await fetch(url, {
       method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -293,6 +347,63 @@ export default function AdminPage() {
     if (!res.ok) { const err = await res.json(); alert(err.error || "Errore"); return; }
     loadData();
   };
+
+  // ── Pack CRUD ──
+  const resetPackForm = () => {
+    setPackEditId(null); setPackName(""); setPackSlug(""); setPackDescription("");
+    setPackEventDate(""); setPackColor("#a855f7"); setPackIcon("📦"); setPackIsPublic(false); setPackError("");
+  };
+
+  const openEditPack = (p: Pack) => {
+    setPackEditId(p.id); setPackName(p.name); setPackSlug(p.slug);
+    setPackDescription(p.description ?? "");
+    setPackEventDate(p.eventDate ? new Date(p.eventDate).toISOString().slice(0, 10) : "");
+    setPackColor(p.color ?? "#a855f7"); setPackIcon(p.icon ?? "📦");
+    setPackIsPublic(p.isPublic); setPackError(""); setShowPackForm(true);
+  };
+
+  const savePack = async () => {
+    setPackError("");
+    if (!packName.trim() || !packSlug.trim()) { setPackError("Nome e slug obbligatori"); return; }
+    const url = packEditId ? `/api/admin/packs/${packEditId}` : "/api/admin/packs";
+    const method = packEditId ? "PUT" : "POST";
+    const body: Record<string, unknown> = {
+      name: packName.trim(),
+      description: packDescription.trim() || null,
+      // eventDate va in formato ISO: dal date input "YYYY-MM-DD" lo trasformo a UTC mezzanotte
+      eventDate: packEventDate ? new Date(packEventDate).toISOString() : null,
+      color: packColor,
+      icon: packIcon || null,
+      isPublic: packIsPublic,
+    };
+    // Lo slug si imposta solo in creazione (non modificabile dopo: cambierebbe URL pubblici)
+    if (!packEditId) body.slug = packSlug.trim();
+
+    const res = await fetch(url, {
+      method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (!res.ok) { const err = await res.json(); setPackError(err.error || "Errore"); return; }
+    resetPackForm(); setShowPackForm(false); loadData();
+  };
+
+  const deletePack = async (id: string) => {
+    if (!confirm("Eliminare il pack? Le domande non verranno cancellate, solo l'associazione al pack.")) return;
+    const res = await fetch(`/api/admin/packs/${id}`, { method: "DELETE" });
+    if (!res.ok) { const err = await res.json(); alert(err.error || "Errore"); return; }
+    // Se sto buildando questo pack, esci dalla build mode
+    if (buildPackId === id) setBuildPackId(null);
+    loadData();
+  };
+
+  // Entra/esci dalla "build mode" per un pack: ogni nuova domanda creata verrà auto-attached.
+  const enterBuildMode = (id: string) => {
+    setBuildPackId(id);
+    setTab("questions"); // porto l'utente direttamente al form domande
+    setShowQForm(true);
+    resetQForm();
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const exitBuildMode = () => setBuildPackId(null);
 
   const filtered = questions.filter(
     (q) =>
@@ -359,11 +470,31 @@ export default function AdminPage() {
           </div>
         </div>
 
+        {/* Banner build mode: ogni nuova domanda creata viene auto-attached al pack indicato */}
+        {buildingPack && (
+          <div className="card mb-4 flex items-center gap-3 border-2 animate-slide-up"
+               style={{ borderColor: buildingPack.color ?? "#a855f7", backgroundColor: `${buildingPack.color ?? "#a855f7"}15` }}>
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl flex-shrink-0"
+                 style={{ backgroundColor: `${buildingPack.color ?? "#a855f7"}40` }}>
+              {buildingPack.icon ?? "📦"}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-muted">🛠 Build mode attivo</p>
+              <p className="font-bold truncate">Stai compilando il pack: {buildingPack.name}</p>
+              <p className="text-xs text-muted">Ogni nuova domanda creata verrà aggiunta automaticamente a questo pack.</p>
+            </div>
+            <button onClick={exitBuildMode} className="btn-secondary text-sm flex-shrink-0">Esci</button>
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="flex gap-1 mb-6 border-b border-border">
-          {(["questions", "categories", "import"] as Tab[]).map((t) => (
+          {(["questions", "categories", "packs", "import"] as Tab[]).map((t) => (
             <button key={t} onClick={() => setTab(t)} className={`px-5 py-2.5 text-sm font-medium rounded-t-lg transition-colors ${tab === t ? "bg-surface text-white border-b-2 border-accent" : "text-muted hover:text-white"}`}>
-              {t === "questions" ? `Domande (${questions.length})` : t === "categories" ? `Categorie (${categories.length})` : "📥 Importa"}
+              {t === "questions" ? `Domande (${questions.length})`
+                : t === "categories" ? `Categorie (${categories.length})`
+                : t === "packs" ? `📦 Pack (${packs.length})`
+                : "📥 Importa"}
             </button>
           ))}
         </div>
@@ -427,7 +558,7 @@ export default function AdminPage() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium mb-1">Punti base: {qPoints}</label>
-                      <input type="range" min={100} max={2000} step={50} value={qPoints} onChange={(e) => setQPoints(Number(e.target.value))} className="w-full accent-accent" />
+                      <input type="range" min={0} max={2000} step={10} value={qPoints} onChange={(e) => setQPoints(Number(e.target.value))} className="w-full accent-accent" />
                       <p className="text-[10px] text-muted mt-0.5">In Jeopardy questo è anche il valore della cella.</p>
                     </div>
                   </div>
@@ -666,6 +797,16 @@ export default function AdminPage() {
                   <option key={meta.type} value={meta.type}>{meta.icon} {meta.label}</option>
                 ))}
               </select>
+              {/* Filtro pack: tutti / qualsiasi pack / nessun pack / pack specifico */}
+              <select value={filterPack} onChange={(e) => setFilterPack(e.target.value)} className="input w-auto">
+                <option value="">Tutti i pack (DB generale)</option>
+                <option value="any">📦 In qualsiasi pack</option>
+                <option value="none">— In nessun pack</option>
+                {packs.length > 0 && <option disabled>──────────</option>}
+                {packs.map((p) => (
+                  <option key={p.id} value={p.id}>{p.icon ?? "📦"} {p.name}</option>
+                ))}
+              </select>
             </div>
 
             {/* Lista domande */}
@@ -824,6 +965,129 @@ export default function AdminPage() {
                 return rootCats.map((c) => renderCat(c, 0));
               })()}
               {categories.length === 0 && <div className="text-center py-12 text-muted">Nessuna categoria. Creane una per iniziare.</div>}
+            </div>
+          </>
+        )}
+
+        {/* ── PACK DOMANDE ── */}
+        {tab === "packs" && (
+          <>
+            <div className="flex justify-between items-center mb-4">
+              <p className="text-sm text-muted">
+                I pack sono collezioni curate (es. &ldquo;Torneo del 11/05&rdquo;). Una domanda può stare in più pack
+                e resta sempre nel DB generale.
+              </p>
+              <button onClick={() => { resetPackForm(); setShowPackForm(!showPackForm); }} className="btn-primary">
+                {showPackForm && !packEditId ? "Chiudi" : "+ Nuovo pack"}
+              </button>
+            </div>
+
+            {showPackForm && (
+              <div className="card mb-6 animate-slide-up">
+                <h2 className="text-xl font-bold mb-4">{packEditId ? "Modifica pack" : "Nuovo pack"}</h2>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Nome</label>
+                      <input value={packName}
+                             onChange={(e) => { setPackName(e.target.value); if (!packEditId) setPackSlug(slugify(e.target.value)); }}
+                             className="input" placeholder="Es. Torneo del 11/05" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">
+                        Slug {packEditId && <span className="text-xs text-muted">(non modificabile)</span>}
+                      </label>
+                      <input value={packSlug} onChange={(e) => setPackSlug(e.target.value)}
+                             disabled={!!packEditId}
+                             className="input font-mono disabled:opacity-50" placeholder="es. torneo-11-05" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Descrizione (opzionale)</label>
+                    <textarea value={packDescription} onChange={(e) => setPackDescription(e.target.value)}
+                              rows={2} className="input" placeholder="Breve descrizione del pack..." />
+                  </div>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Data evento</label>
+                      <input type="date" value={packEventDate} onChange={(e) => setPackEventDate(e.target.value)}
+                             className="input" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Icona</label>
+                      <input value={packIcon} onChange={(e) => setPackIcon(e.target.value)}
+                             className="input text-2xl" placeholder="📦" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Colore</label>
+                      <div className="flex gap-2">
+                        <input type="color" value={packColor} onChange={(e) => setPackColor(e.target.value)}
+                               className="w-10 h-10 rounded cursor-pointer bg-transparent border-0 p-0" />
+                        <input value={packColor} onChange={(e) => setPackColor(e.target.value)}
+                               className="input flex-1 font-mono" />
+                      </div>
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={packIsPublic} onChange={(e) => setPackIsPublic(e.target.checked)}
+                           className="w-4 h-4 accent-accent" />
+                    <span className="text-sm">Pubblico (visibile a tutti gli utenti registrati)</span>
+                  </label>
+                  {packError && <div className="bg-danger/10 border border-danger/30 text-danger rounded-lg p-3 text-sm">{packError}</div>}
+                  <div className="flex gap-3">
+                    <button onClick={savePack} className="btn-primary flex-1">{packEditId ? "Salva modifiche" : "Crea pack"}</button>
+                    {packEditId && <button onClick={() => { resetPackForm(); setShowPackForm(false); }} className="btn-secondary flex-1">Annulla</button>}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {packs.map((p) => {
+                const active = buildPackId === p.id;
+                return (
+                  <div key={p.id}
+                       className={`card transition-all ${active ? "ring-2" : ""}`}
+                       style={active ? { borderColor: p.color ?? "#a855f7", boxShadow: `0 0 0 2px ${(p.color ?? "#a855f7")}40` } : undefined}>
+                    <div className="flex items-start gap-3 mb-3">
+                      <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl flex-shrink-0"
+                           style={{ backgroundColor: `${p.color ?? "#a855f7"}25`, border: `2px solid ${(p.color ?? "#a855f7")}60` }}>
+                        {p.icon ?? "📦"}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <p className="font-semibold truncate" style={{ color: p.color ?? "#fff" }}>{p.name}</p>
+                          {p.isPublic
+                            ? <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-success/20 text-success">PUBBLICO</span>
+                            : <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted/20 text-muted">PRIVATO</span>}
+                        </div>
+                        <p className="text-xs text-muted font-mono">{p.slug}</p>
+                        {p.eventDate && (
+                          <p className="text-xs text-muted">📅 {new Date(p.eventDate).toLocaleDateString("it-IT")}</p>
+                        )}
+                        {p.description && <p className="text-sm text-muted mt-1 line-clamp-2">{p.description}</p>}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted">{p._count?.questions ?? 0} domande</span>
+                      <div className="flex gap-3 text-sm">
+                        {!active ? (
+                          <button onClick={() => enterBuildMode(p.id)} className="text-accent hover:underline">🛠 Build mode</button>
+                        ) : (
+                          <span className="text-success font-semibold">● Attivo</span>
+                        )}
+                        <button onClick={() => openEditPack(p)} className="text-muted hover:text-white">Modifica</button>
+                        <button onClick={() => deletePack(p.id)} className="text-danger hover:underline">Elimina</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {packs.length === 0 && (
+                <div className="md:col-span-2 text-center py-12 text-muted">
+                  Nessun pack ancora. Creane uno per organizzare le domande di un evento.
+                </div>
+              )}
             </div>
           </>
         )}

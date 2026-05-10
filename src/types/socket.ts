@@ -3,7 +3,9 @@
 // (contratto unico per validazione, dispatcher, UI).
 
 import type { QuestionType } from "../lib/questionTypes.js";
+import type { RoundConfig, PlayMode } from "../lib/roundsConfig.js";
 export type { QuestionType };
+export type { RoundConfig, PlayMode };
 export type DifficultyFilter = "EASY" | "MEDIUM" | "HARD" | "ALL";
 
 export interface ServerToClientEvents {
@@ -41,6 +43,20 @@ export interface ServerToClientEvents {
   error: (data: { message: string }) => void;
   "player:joined": (data: { player: PlayerInfo }) => void;
   "player:left": (data: { playerId: string }) => void;
+
+  // ── Spettatori con dispositivo (Task #6) ──
+  // Reazione emoji broadcast a tutti (host + giocatori + spettatori) — appare sullo schermo grande.
+  "spectator:reaction": (data: { spectatorId: string; nickname: string; emoji: string; ts: number }) => void;
+  // Lista spettatori aggiornata (per UI host che li mostra nella lobby).
+  "spectator:list": (data: { spectators: SpectatorInfo[] }) => void;
+}
+
+export interface SpectatorInfo {
+  id: string;
+  nickname: string;
+  emoji?: string | null;
+  avatarUrl?: string | null;
+  userId: string;
 }
 
 export interface ClientToServerEvents {
@@ -68,6 +84,16 @@ export interface ClientToServerEvents {
       // Selezione manuale delle domande per round (allineato a tournamentModes; length 1 per singola modalità).
       // Se presente e con length == totalQuestions per quel round, sovrascrive il picking casuale.
       manualQuestionIds?: string[][];
+
+      // ── Nuovo contratto (preferito dal client moderno) ──
+      // Se popolato, il server lo userà come fonte di verità ignorando tutti i campi sopra
+      // tranne hostName, totalQuestions e categoryIds (filtro globale).
+      // Ogni RoundConfig è auto-contenuto (modalità + tempo + punti + opzioni).
+      roundsConfig?: RoundConfig[];
+      // Default di partita (ereditati da ogni round se non specificati). Per Game.playMode/passOnWrong/turnOrder.
+      playMode?: PlayMode;
+      passOnWrong?: boolean;
+      turnOrder?: string[];        // ordini Player.id; se vuoto/non passato → casuale al join
     },
     callback: (response: { code: string; gameId: string } | { error: string }) => void
   ) => void;
@@ -140,6 +166,17 @@ export interface ClientToServerEvents {
     data: { code: string },
     callback: (response: { success: true; gameId: string; state: GameStateSnapshot } | { success: false; error: string }) => void
   ) => void;
+
+  // ── Spettatori con dispositivo (Task #6) ──
+  // Si registra come spettatore con dispositivo (richiede userId — solo utenti registrati).
+  // Vede tutto tranne le risposte degli altri prima della rivelazione. Illimitati per partita.
+  // La distinzione player/spettatore viene decisa all'ingresso e non cambia in corsa.
+  "spectator:join-device": (
+    data: { code: string; userId: string; nickname: string; emoji?: string; avatarUrl?: string },
+    callback: (response: { success: true; gameId: string; spectatorId: string; state: GameStateSnapshot } | { success: false; error: string }) => void
+  ) => void;
+  // Spettatore manda una reazione emoji (rate-limit lato server, max 1/sec per spettatore).
+  "spectator:reaction-send": (data: { gameId: string; spectatorId: string; emoji: string }) => void;
 
   // 100 Secondi: host avvia il duello scegliendo i 2 sfidanti
   "duel:start": (

@@ -955,7 +955,7 @@ async function finishGame(gameId: string) {
 io.on("connection", (socket) => {
   console.log(`[socket] client connesso: ${socket.id}`);
 
-  socket.on("host:create", async ({ hostName, difficulty, totalQuestions, questionType, tournamentModes, tournamentTimeLimits, categoryIds, timeLimitOverride, lastManStanding, speedrunDuration, livesAllowed, jeopardyMode, fiftyFiftyCount, skipCount, localPartyMode, pointsOverrides, tournamentCategoryIds, categoryPickMode, manualQuestionIds }, callback) => {
+  socket.on("host:create", async ({ hostName, difficulty, totalQuestions, questionType, tournamentModes, tournamentTimeLimits, categoryIds, timeLimitOverride, lastManStanding, speedrunDuration, livesAllowed, jeopardyMode, fiftyFiftyCount, skipCount, localPartyMode, pointsOverrides, tournamentCategoryIds, categoryPickMode, manualQuestionIds, roundsConfig, playMode, passOnWrong, turnOrder }, callback) => {
     try {
       let code = generateGameCode();
       let attempts = 0;
@@ -964,11 +964,16 @@ io.on("connection", (socket) => {
         attempts++;
       }
 
-      // Modalità: singola oppure torneo (può contenere duplicati: la stessa modalità più volte)
-      const modes: QuestionType[] =
-        tournamentModes && tournamentModes.length > 0
-          ? tournamentModes
-          : [questionType];
+      // ── Nuovo path: roundsConfig (preferito quando presente) ──
+      // Quando il client moderno invia roundsConfig, lo usiamo come fonte di verità:
+      // ogni round dichiara tipo + tempo + punti + sorgente (manual/packs/categories) + opzioni.
+      // I campi legacy vengono comunque popolati per retrocompat con il dispatcher in fase di transizione.
+      const useRoundsConfig = Array.isArray(roundsConfig) && roundsConfig.length > 0;
+
+      // Modalità: derivate da roundsConfig (nuovo) o tournamentModes (legacy) o singola
+      const modes: QuestionType[] = useRoundsConfig
+        ? roundsConfig!.map((r) => r.type)
+        : (tournamentModes && tournamentModes.length > 0 ? tournamentModes : [questionType]);
 
       // Filtro difficoltà: "ALL" = nessun filtro
       const difficultyFilter = difficulty === "ALL" ? undefined : difficulty;
@@ -983,7 +988,10 @@ io.on("connection", (socket) => {
 
       for (let i = 0; i < modes.length; i++) {
         const mode = modes[i];
-        const manualIds = manualQuestionIds?.[i] ?? [];
+        // Sorgente domande: priorità (manualIds) > (packIds) > (categoryIds del round) > (filtro globale)
+        const roundFromConfig = useRoundsConfig ? roundsConfig![i] : null;
+        const manualIds = roundFromConfig?.manualQuestionIds ?? manualQuestionIds?.[i] ?? [];
+        const packIds = roundFromConfig?.packIds ?? [];
 
         // Selezione manuale: se l'host ha spuntato esattamente totalQuestions domande, usa quelle
         if (manualIds.length === totalQuestions) {
@@ -1003,21 +1011,31 @@ io.on("connection", (socket) => {
           continue;
         }
 
-        const perRoundCatIds = tournamentCategoryIds?.[i] ?? [];
+        // Sorgente "pack": se il round ha pack selezionati, peschiamo SOLO da lì.
+        // (Le domande del pack restano comunque nel DB generale; questo è solo un filtro di sorgente.)
+        const perRoundCatIds = roundFromConfig?.categoryIds ?? tournamentCategoryIds?.[i] ?? [];
         const effectiveCatIds = perRoundCatIds.length > 0 ? perRoundCatIds : (globalCategoryIds ?? []);
         const roundCategoryFilter = effectiveCatIds.length > 0 ? { in: effectiveCatIds } : undefined;
+        // Filtro pack: domande che appaiono almeno in uno dei pack scelti.
+        // Usiamo la relazione QuestionInPack (vedi prisma/schema.prisma).
+        const packFilter = packIds.length > 0
+          ? { packs: { some: { packId: { in: packIds } } } }
+          : undefined;
+
         const pool = await prisma.question.findMany({
           where: {
             type: mode,
             ...(difficultyFilter ? { difficulty: difficultyFilter } : {}),
             ...(roundCategoryFilter ? { categoryId: roundCategoryFilter } : {}),
+            ...(packFilter ?? {}),
             id: { notIn: Array.from(usedQuestionIds) },
           },
           include: { answers: true },
         });
         if (pool.length < totalQuestions) {
+          const sourceDesc = packIds.length > 0 ? "del pack scelto" : "(con i filtri scelti)";
           callback({
-            error: `Modalità "${getTypeLabel(mode)}" (round ${i + 1}): solo ${pool.length} domande disponibili su ${totalQuestions} richieste (con i filtri scelti).`,
+            error: `Modalità "${getTypeLabel(mode)}" (round ${i + 1}): solo ${pool.length} domande disponibili su ${totalQuestions} richieste ${sourceDesc}.`,
           });
           return;
         }
@@ -1048,6 +1066,15 @@ io.on("connection", (socket) => {
         ? tournamentCategoryIds.map((arr) => (arr ?? []).filter(Boolean).join(",")).join("|")
         : null;
 
+      // Nuovi campi (Game.roundsConfig, playMode, passOnWrong, turnOrder).
+      // Se useRoundsConfig: serializzo la struttura completa così il dispatcher può leggerla.
+      // turnOrder: il client può passare un CSV; se non passato/vuoto resta null e verrà generato a caso al via partita.
+      const roundsConfigSerialized = useRoundsConfig ? JSON.stringify(roundsConfig) : null;
+      const validPlayMode = playMode === "TURN_BASED" || playMode === "FREE_FOR_ALL" ? playMode : "FREE_FOR_ALL";
+      const turnOrderCsv = Array.isArray(turnOrder) && turnOrder.length > 0
+        ? turnOrder.filter((s) => typeof s === "string" && s.length > 0).join(",")
+        : null;
+
       const game = await prisma.game.create({
         data: {
           code,
@@ -1067,6 +1094,11 @@ io.on("connection", (socket) => {
           pointsOverrides: pointsOverridesCsv,
           tournamentCategoryIds: tournamentCategoryIdsCsv,
           categoryPickMode: !!categoryPickMode && !jeopardyMode,
+          // Nuovi campi (Task #5)
+          roundsConfig: roundsConfigSerialized,
+          playMode: validPlayMode,
+          passOnWrong: !!passOnWrong,
+          turnOrder: turnOrderCsv,
           totalQuestions: flat.length,
           gameQuestions: {
             create: flat.map((q, i) => ({ questionId: q.id, order: i })),
@@ -1101,6 +1133,78 @@ io.on("connection", (socket) => {
     if (duelNow && !duelNow.state.finished && duelNow.correctAnswer) {
       socket.emit("duel:host-info", { correctAnswer: duelNow.correctAnswer });
     }
+  });
+
+  // ── Spettatori con dispositivo (Task #6) ─────────────────────────────────
+  // Differiscono dallo spectator "schermo proiezione" perché:
+  // - sono persone (utenti registrati, userId obbligatorio)
+  // - hanno nickname/emoji/avatar visibili nella lista lobby
+  // - possono mandare reazioni emoji (broadcast a tutti)
+  // - la distinzione player/spettatore è decisa all'ingresso, non si cambia in corsa
+  // - nessun limite di numero (player sono fino a 8, spettatori illimitati)
+
+  // Rate-limit reactions: 1/sec per spettatore.
+  const lastReactionAt = new Map<string, number>();
+
+  socket.on("spectator:join-device", async ({ code, userId, nickname, emoji, avatarUrl }, callback) => {
+    try {
+      const game = await prisma.game.findUnique({ where: { code: code.toUpperCase() } });
+      if (!game) { callback({ success: false, error: "Codice partita non valido" }); return; }
+      if (!userId) { callback({ success: false, error: "Solo utenti registrati possono entrare come spettatori" }); return; }
+
+      // Upsert: se l'utente è già registrato come spettatore di questa partita, riusa il record (rejoin)
+      const spectator = await prisma.spectator.upsert({
+        where: { gameId_userId: { gameId: game.id, userId } },
+        create: {
+          gameId: game.id,
+          userId,
+          nickname: nickname.trim().slice(0, 20),
+          emoji: emoji ?? null,
+          avatarUrl: avatarUrl ?? null,
+          socketId: socket.id,
+        },
+        update: { socketId: socket.id, nickname: nickname.trim().slice(0, 20), emoji: emoji ?? null, avatarUrl: avatarUrl ?? null },
+      });
+
+      socket.join(`game:${game.id}`);
+      socket.join(`spectator:${game.id}`);
+      socket.data.role = "spectator-device";
+      socket.data.gameId = game.id;
+      socket.data.spectatorId = spectator.id;
+
+      const snapshot = await buildGameStateSnapshot(game.id);
+      if (!snapshot) { callback({ success: false, error: "Partita non trovata" }); return; }
+
+      callback({ success: true, gameId: game.id, spectatorId: spectator.id, state: snapshot });
+
+      // Aggiorna lista spettatori per host
+      const all = await prisma.spectator.findMany({ where: { gameId: game.id }, orderBy: { joinedAt: "asc" } });
+      io.to(`host:${game.id}`).emit("spectator:list", {
+        spectators: all.map((s) => ({ id: s.id, nickname: s.nickname, emoji: s.emoji, avatarUrl: s.avatarUrl, userId: s.userId })),
+      });
+    } catch (e) {
+      console.error("spectator:join-device error", e);
+      callback({ success: false, error: "Errore interno" });
+    }
+  });
+
+  socket.on("spectator:reaction-send", async ({ gameId, spectatorId, emoji }) => {
+    if (!gameId || !spectatorId || !emoji) return;
+    // Rate-limit: max 1 reazione/sec per spettatore
+    const now = Date.now();
+    const prev = lastReactionAt.get(spectatorId) ?? 0;
+    if (now - prev < 1000) return;
+    lastReactionAt.set(spectatorId, now);
+    // Sanitize emoji: max 8 chars (singola emoji o pochi caratteri)
+    const cleanEmoji = String(emoji).slice(0, 8);
+    const spectator = await prisma.spectator.findUnique({ where: { id: spectatorId } });
+    if (!spectator || spectator.gameId !== gameId) return;
+    io.to(`game:${gameId}`).emit("spectator:reaction", {
+      spectatorId,
+      nickname: spectator.nickname,
+      emoji: cleanEmoji,
+      ts: now,
+    });
   });
 
   // Spettatore: entra come osservatore con il codice partita. Riceve gli eventi pubblici
@@ -1153,9 +1257,29 @@ io.on("connection", (socket) => {
       socket.emit("error", { message: "Servono almeno 1 giocatore per iniziare" });
       return;
     }
+
+    // Genera turnOrder casuale se non esplicitamente impostato dall'host (e se la partita
+    // potrebbe avere round TURN_BASED). L'host può modificarlo prima dello start in lobby
+    // tramite l'apposita UI (TODO Task #5b). Resta fisso per tutta la partita.
+    let turnOrderToSet: string | null = null;
+    if (!game.turnOrder || game.turnOrder.length === 0) {
+      const playerIds = game.players.map((p) => p.id);
+      // Fisher-Yates shuffle
+      for (let i = playerIds.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [playerIds[i], playerIds[j]] = [playerIds[j], playerIds[i]];
+      }
+      turnOrderToSet = playerIds.join(",");
+    }
+
     await prisma.game.update({
       where: { id: gameId },
-      data: { status: "PLAYING", startedAt: new Date(), currentIndex: 0 },
+      data: {
+        status: "PLAYING",
+        startedAt: new Date(),
+        currentIndex: 0,
+        ...(turnOrderToSet ? { turnOrder: turnOrderToSet } : {}),
+      },
     });
     io.to(`game:${gameId}`).emit("lobby:started");
 
