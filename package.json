@@ -8,6 +8,7 @@
     "dev:next": "next dev",
     "dev:socket": "tsx watch server/socket-server.ts",
     "build": "prisma generate && next build",
+    "build:prod": "prisma generate --schema=prisma/schema.production.prisma && next build",
     "start": "concurrently \"next start\" \"tsx server/socket-server.ts\"",
     "start:web": "next start",
     "start:socket": "tsx server/socket-server.ts",
