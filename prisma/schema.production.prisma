@@ -1,6 +1,5 @@
-// Prisma schema PER PRODUZIONE (Railway / PostgreSQL).
-// In locale usa prisma/schema.prisma (SQLite).
-// Build di produzione: npm run build:prod (prisma generate --schema=... && next build)
+// Prisma schema per il quiz game
+// Usa SQLite per sviluppo, cambia provider in "postgresql" per produzione
 
 generator client {
   provider = "prisma-client-js"
@@ -17,10 +16,11 @@ model User {
   id            String    @id @default(cuid())
   email         String?   @unique
   emailVerified DateTime?
-  username      String?   @unique
-  displayName   String?
+  username      String?   @unique      // handle pubblico @fabri99 (opzionale finché non scelto)
+  displayName   String?                 // nome mostrato, fallback nickname
   image         String?
-  passwordHash  String?
+  passwordHash  String?                 // solo per login con email+password
+  // Stat aggregati nel tempo (gamification — alimentati a fine partita)
   level         Int       @default(1)
   xp            Int       @default(0)
   coins         Int       @default(0)
@@ -28,16 +28,22 @@ model User {
   totalWins     Int       @default(0)
   totalCorrect  Int       @default(0)
   bestStreak    Int       @default(0)
+  // Daily streak (giorni consecutivi con login + partita giocata)
   dailyStreak   Int       @default(0)
   lastLoginDate DateTime?
+  // Piano commerciale (FREE | PRO | EDU) + Stripe
   plan                String  @default("FREE")
   stripeCustomerId    String?
   subscriptionStatus  String?
+  // Relazioni NextAuth
   accounts      Account[]
   sessions      Session[]
+  // Relazioni gioco
   players       Player[]
+  spectators    Spectator[]
   leaderboards  Leaderboard[]
   badges        UserBadge[]
+  packs         QuestionPack[] @relation("UserPacks")
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -52,7 +58,7 @@ model Badge {
   name        String
   description String
   icon        String
-  rarity      String
+  rarity      String      // common | rare | epic | legendary
   users       UserBadge[]
 }
 
@@ -102,12 +108,14 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
+// Categoria delle domande (Storia, Geografia, ecc.) — ora gerarchica (root + sub)
 model Category {
   id        String     @id @default(cuid())
   name      String
   slug      String     @unique
-  icon      String?
-  color     String?
+  icon      String? // emoji o nome icona
+  color     String? // hex color per UI
+  // Gerarchia: parentId null = categoria root; popolato = sotto-categoria
   parentId  String?
   parent    Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
   children  Category[] @relation("CategoryTree")
@@ -118,22 +126,24 @@ model Category {
   @@index([parentId])
 }
 
+// Domanda del quiz
 model Question {
   id            String      @id @default(cuid())
   text          String
-  type          String      @default("MULTIPLE_CHOICE")
-  difficulty    String      @default("MEDIUM")
-  timeLimit     Int         @default(20)
-  points        Int         @default(1000)
-  explanation   String?
-  imageUrl      String?
-  mediaType     String?
-  openAnswer    String?
-  wordTemplate  String?
+  type          String      @default("MULTIPLE_CHOICE") // MULTIPLE_CHOICE, OPEN_ANSWER, WORD_COMPLETION, IMAGE_GUESS
+  difficulty    String      @default("MEDIUM") // EASY, MEDIUM, HARD
+  timeLimit     Int         @default(20) // secondi
+  points        Int         @default(100)
+  explanation   String? // spiegazione opzionale dopo la risposta
+  imageUrl      String? // URL immagine o video allegato alla domanda
+  mediaType     String? // "image" | "video" — tipo del media allegato
+  openAnswer    String? // risposta attesa per OPEN_ANSWER (confronto automatico case-insensitive)
+  wordTemplate  String? // template con _ per lettere mancanti (es. "M_L_NO")
   categoryId    String
   category      Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   answers       Answer[]
   gameQuestions GameQuestion[]
+  packs         QuestionInPack[]
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
@@ -141,6 +151,43 @@ model Question {
   @@index([type])
 }
 
+// Pack di domande ("macro categoria"): collezione curata di domande per un evento o tema
+// specifico (es. "Torneo del 11/05"). Una domanda può stare in più pack e resta sempre
+// visibile nel DB generale tramite il filtro categoria standard.
+// Workflow "build mode": l'host entra in un pack e ogni domanda creata viene auto-aggiunta.
+model QuestionPack {
+  id          String           @id @default(cuid())
+  name        String
+  slug        String           @unique
+  description String?
+  eventDate   DateTime?
+  color       String?
+  icon        String?
+  coverUrl    String?
+  isPublic    Boolean          @default(false) // false = visibile solo al creatore; true = a tutti
+  creatorId   String?
+  creator     User?            @relation("UserPacks", fields: [creatorId], references: [id], onDelete: SetNull)
+  questions   QuestionInPack[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([creatorId])
+  @@index([isPublic])
+}
+
+// Join M:N tra Pack e Question. Una domanda può stare in più pack e in nessuno.
+model QuestionInPack {
+  packId     String
+  pack       QuestionPack @relation(fields: [packId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question     @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  addedAt    DateTime     @default(now())
+
+  @@id([packId, questionId])
+  @@index([questionId])
+}
+
+// Risposte (4 per domanda, una sola corretta)
 model Answer {
   id         String   @id @default(cuid())
   text       String
@@ -151,29 +198,50 @@ model Answer {
   playerAnswers PlayerAnswer[]
 }
 
+// Partita in corso (una sessione di gioco con codice)
 model Game {
   id            String       @id @default(cuid())
-  code          String       @unique
-  status        String       @default("LOBBY")
+  code          String       @unique // codice di 6 cifre per i player
+  status        String       @default("LOBBY") // LOBBY, PLAYING, FINISHED
   hostName      String?
   difficulty    String       @default("MEDIUM")
-  questionType  String       @default("MULTIPLE_CHOICE")
-  tournamentModes String?
-  tournamentTimeLimits String?
-  timeLimitOverride Int?
-  lastManStanding Boolean    @default(false)
-  speedrunDuration Int?
-  livesAllowed   Int?
-  jeopardyMode   Boolean     @default(false)
-  fiftyFiftyCount Int        @default(0)
-  skipCount      Int         @default(0)
+  questionType  String       @default("MULTIPLE_CHOICE") // tipo domande selezionato dall'host
+  tournamentModes String?    // CSV di modalità per torneo (es. "MULTIPLE_CHOICE,WORD_COMPLETION"); null = singola modalità
+  tournamentTimeLimits String? // CSV di tempi per round (allineato a tournamentModes, es. "20,0,30"). null = usa timeLimitOverride/domanda
+  timeLimitOverride Int?     // override secondi per domanda: null=usa quello della domanda, 0=senza limite (manuale), 10-60=secondi
+  lastManStanding Boolean    @default(false) // "Ultimo in piedi": una risposta sbagliata elimina il giocatore
+  speedrunDuration Int?      // "Speedrun": durata totale in secondi (null = disattivo)
+  livesAllowed   Int?        // "Caduta libera": numero di errori tollerati prima dell'eliminazione (null = disattivo)
+  jeopardyMode   Boolean     @default(false) // "Jeopardy": griglia categorie × valori, host sceglie le celle
+  fiftyFiftyCount Int        @default(0) // quanti aiuti 50/50 ogni giocatore ha (0 = disabilitato)
+  skipCount      Int         @default(0) // quanti aiuti Salto ogni giocatore ha (0 = disabilitato)
+  // "In presenza": nessun dispositivo per i giocatori. Turni a rotazione, host giudica a voce.
+  // Gli 8 Player vengono creati all'inizio dall'host, senza socket né nickname input lato player.
   localPartyMode Boolean     @default(false)
+  // Override punti per ROUND: CSV allineato a tournamentModes (lunghezza 1 se singola modalità).
+  // Es. "500,1000,1500". Null/empty = usa i `points` della singola domanda.
   pointsOverrides String?
+  // Categorie per ROUND: pipe-separato, CSV per round. Es. "cat1,cat2|cat3|" → round1 filtra cat1,cat2; round2 solo cat3; round3 nessun filtro.
+  // Null = usa `categoryIds` globale (nessun filtro se anche quello è null).
   tournamentCategoryIds String?
+  // Se true: prima di ogni domanda l'host sceglie una CATEGORIA dalla griglia (categorie con rimanenti > 0).
   categoryPickMode Boolean   @default(false)
+  // Configurazione torneo "moderna" (sostituisce i CSV qui sopra per i tornei nuovi).
+  // JSON serializzato: array di RoundConfig (vedi src/lib/roundsConfig.ts per il tipo).
+  // Quando popolato, ha precedenza sui CSV. I CSV restano per retrocompatibilità delle partite vecchie.
+  roundsConfig  String?
+  // Modalità di gioco di base (per partita singola; nel torneo ogni round può overridarla via roundsConfig).
+  // FREE_FOR_ALL = tutti rispondono insieme (richiede dispositivi). TURN_BASED = a turni.
+  playMode      String       @default("FREE_FOR_ALL")
+  // Ordine dei turni: CSV di Player.id. Generato casualmente alla prima partita,
+  // modificabile dall'host pre-start. Resta fisso per tutta la partita.
+  turnOrder     String?
+  // Se true: in TURN_BASED, se il primo player sbaglia, la stessa domanda passa al successivo.
+  passOnWrong   Boolean      @default(false)
   totalQuestions Int         @default(10)
   currentIndex  Int          @default(0)
   players       Player[]
+  spectators    Spectator[]
   gameQuestions GameQuestion[]
   createdAt     DateTime     @default(now())
   startedAt     DateTime?
@@ -182,6 +250,28 @@ model Game {
   @@index([code])
 }
 
+// Spettatore con dispositivo. Ruolo separato dai Player: vede tutto tranne le risposte
+// degli altri prima della rivelazione, può mandare reazioni emoji, non risponde, non
+// è in classifica. Solo utenti registrati (userId obbligatorio). Limite: nessuno.
+// La distinzione player/spettatore viene decisa all'ingresso e non cambia in corsa.
+model Spectator {
+  id         String   @id @default(cuid())
+  nickname   String
+  emoji      String?
+  avatarUrl  String?
+  gameId     String
+  game       Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  socketId   String?  // per reconnect
+  userId     String   // spettatori sono SOLO utenti registrati
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt   DateTime @default(now())
+
+  @@unique([gameId, userId]) // un utente entra come spettatore al massimo una volta per partita
+  @@index([gameId])
+  @@index([userId])
+}
+
+// Domanda associata a una partita (con ordine)
 model GameQuestion {
   id         String   @id @default(cuid())
   gameId     String
@@ -195,23 +285,25 @@ model GameQuestion {
   @@unique([gameId, order])
 }
 
+// Giocatore in una partita
 model Player {
   id         String   @id @default(cuid())
   nickname   String
   score      Int      @default(0)
   emoji      String?
   avatarUrl  String?
-  eliminated Boolean  @default(false)
-  wrongCount Int      @default(0)
-  fiftyFiftyUsed Int   @default(0)
-  skipUsed   Int      @default(0)
-  streak     Int      @default(0)
-  bestStreak Int      @default(0)
-  pendingWager Int    @default(0)
+  eliminated Boolean  @default(false) // per modalità "Ultimo in piedi" / "Caduta libera"
+  wrongCount Int      @default(0)     // errori commessi in questa partita (per "Caduta libera")
+  fiftyFiftyUsed Int   @default(0) // numero di volte che il player ha usato 50/50
+  skipUsed   Int      @default(0) // numero di volte che il player ha usato Salto
+  streak     Int      @default(0) // risposte corrette consecutive
+  bestStreak Int      @default(0) // massima streak raggiunta nella partita
+  pendingWager Int    @default(0) // scommessa in punti per la prossima domanda
   gameId     String
   game       Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
-  socketId   String?
+  socketId   String? // per reconnect
   answers    PlayerAnswer[]
+  // Legame opzionale a un User autenticato (null per giocatori anonimi / ospiti creati da host)
   userId     String?
   user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   joinedAt   DateTime @default(now())
@@ -220,6 +312,7 @@ model Player {
   @@index([userId])
 }
 
+// Risposta data da un player a una domanda
 model PlayerAnswer {
   id             String       @id @default(cuid())
   playerId       String
@@ -228,16 +321,20 @@ model PlayerAnswer {
   gameQuestion   GameQuestion @relation(fields: [gameQuestionId], references: [id], onDelete: Cascade)
   answerId       String?
   answer         Answer?      @relation(fields: [answerId], references: [id])
-  answerText     String?
-  timeTaken      Int
+  answerText     String? // risposta testuale per OPEN_ANSWER, WORD_COMPLETION, IMAGE_GUESS
+  timeTaken      Int // millisecondi
   pointsEarned   Int          @default(0)
   isCorrect      Boolean      @default(false)
-  judged         Boolean      @default(false)
+  judged         Boolean      @default(false) // true quando admin ha giudicato (OPEN_ANSWER, IMAGE_GUESS)
   answeredAt     DateTime     @default(now())
 
   @@unique([playerId, gameQuestionId])
 }
 
+// Classifica globale (migliori punteggi di tutti i tempi).
+// Oltre al punteggio salva il "come" è stato raggiunto, così la UI può mostrare
+// streak massima, se il giocatore è sopravvissuto (per modalità eliminazione),
+// quali aiuti ha usato e sotto quale modalità di gioco.
 model Leaderboard {
   id             String   @id @default(cuid())
   nickname       String
@@ -245,13 +342,16 @@ model Leaderboard {
   difficulty     String
   totalQuestions Int
   correctAnswers Int
+  // Stat di partita (aggiunti in Fase 3)
   bestStreak     Int      @default(0)
-  wrongCount     Int      @default(0)
-  fiftyFiftyUsed Int      @default(0)
-  skipUsed       Int      @default(0)
-  eliminated     Boolean  @default(false)
-  questionType   String?
-  gameMode       String?
+  wrongCount     Int      @default(0)  // errori commessi nella partita
+  fiftyFiftyUsed Int      @default(0)  // aiuti 50/50 usati
+  skipUsed       Int      @default(0)  // aiuti Salto usati
+  eliminated     Boolean  @default(false) // true se eliminato (Ultimo in piedi / Caduta libera)
+  // Modalità di gioco sotto cui è stata fatta la classifica
+  questionType   String?  // tipo domanda primario (o primo round torneo)
+  gameMode       String?  // label human-readable ("Jeopardy", "Torneo", "Ultimo in piedi", ...)
+  // Legame opzionale a un User autenticato
   userId         String?
   user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   createdAt      DateTime @default(now())
