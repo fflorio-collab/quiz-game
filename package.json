@@ -22,6 +22,7 @@
     "db:seed-all": "npm run db:seed && npm run db:seed-50 && npm run db:seed-types && npm run db:seed-ghigliottina && npm run db:seed-reaction && npm run db:seed-only-connect && npm run db:seed-clue-reveal",
     "db:seed-subcategories": "tsx prisma/seed-subcategories.ts",
     "db:seed-subcategories-questions": "tsx prisma/seed-subcategories-questions.ts",
+    "db:seed-extra-10": "tsx prisma/seed-extra-10.ts",
     "db:seed-badges": "tsx prisma/seed-badges.ts",
     "db:seed-autoimprenditorialita": "tsx prisma/seed-autoimprenditorialita.ts",
     "db:studio": "prisma studio",
