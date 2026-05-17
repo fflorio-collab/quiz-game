@@ -3,7 +3,10 @@ builder = "nixpacks"
 buildCommand = "npm run build:prod"
 
 [deploy]
-startCommand = "npm run start:web"
+# Lo startCommand NON è qui di proposito.
+# Va settato per OGNI servizio dalla UI di Railway (Settings -> Deploy -> Custom Start Command):
+#   - Servizio Web (Next.js): npm run start:web
+#   - Servizio Socket (Socket.io): npm run start:socket
 healthcheckPath = "/"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
