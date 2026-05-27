@@ -35,6 +35,8 @@ type Question = {
   mediaType?: string | null;
   category: Category;
   answers: { id: string; text: string; isCorrect: boolean; order: number }[];
+  // ID dei pack a cui questa domanda appartiene (popolato da GET /api/admin/questions)
+  packs?: { packId: string }[];
 };
 
 type Tab = "questions" | "categories" | "packs" | "import";
@@ -395,15 +397,38 @@ export default function AdminPage() {
     loadData();
   };
 
-  // Entra/esci dalla "build mode" per un pack: ogni nuova domanda creata verrà auto-attached.
+  // Entra/esci dalla "build mode" per un pack.
+  // - In build mode, ogni NUOVA domanda creata viene auto-aggiunta al pack.
+  // - Sulla lista domande esistenti compare un bottone "+ Pack" / "✓ Nel pack" per toggle.
+  // Non apriamo il form domanda automaticamente: l'utente decide se compilare la lista
+  // selezionando domande esistenti o creandone di nuove cliccando "+ Nuova domanda".
   const enterBuildMode = (id: string) => {
     setBuildPackId(id);
-    setTab("questions"); // porto l'utente direttamente al form domande
-    setShowQForm(true);
-    resetQForm();
+    setTab("questions");
+    setShowQForm(false);
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const exitBuildMode = () => setBuildPackId(null);
+
+  // ── Aggiungi/rimuovi una domanda esistente dal pack di build ──
+  // Quando sei in build mode di un pack, ogni card domanda ha un toggle che aggiunge/rimuove
+  // la domanda dal pack. La domanda resta sempre nel DB generale: il pack è solo un'aggregazione.
+  const toggleQuestionInBuildPack = async (questionId: string, currentlyIn: boolean) => {
+    if (!buildPackId) return;
+    const url = `/api/admin/packs/${buildPackId}/questions`;
+    const method = currentlyIn ? "DELETE" : "POST";
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ questionIds: [questionId] }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || "Errore aggiornamento pack");
+      return;
+    }
+    loadData();
+  };
 
   const filtered = questions.filter(
     (q) =>
@@ -481,7 +506,10 @@ export default function AdminPage() {
             <div className="flex-1 min-w-0">
               <p className="text-xs font-medium text-muted">🛠 Build mode attivo</p>
               <p className="font-bold truncate">Stai compilando il pack: {buildingPack.name}</p>
-              <p className="text-xs text-muted">Ogni nuova domanda creata verrà aggiunta automaticamente a questo pack.</p>
+              <p className="text-xs text-muted">
+                Le nuove domande create vengono auto-aggiunte. Per aggiungere domande già esistenti,
+                clicca <span className="text-accent font-medium">+ Pack</span> sulla card della domanda.
+              </p>
             </div>
             <button onClick={exitBuildMode} className="btn-secondary text-sm flex-shrink-0">Esci</button>
           </div>
@@ -860,6 +888,20 @@ export default function AdminPage() {
                       )}
                     </div>
                     <div className="flex flex-col gap-1 flex-shrink-0">
+                      {/* Toggle pack: visibile solo in build mode. La domanda resta nel DB generale. */}
+                      {buildPackId && (() => {
+                        const inPack = (q.packs ?? []).some((p) => p.packId === buildPackId);
+                        return (
+                          <button onClick={() => toggleQuestionInBuildPack(q.id, inPack)}
+                            className={`text-xs px-2 py-1 rounded border transition-colors ${
+                              inPack
+                                ? "border-success bg-success/10 text-success hover:bg-success/20"
+                                : "border-accent text-accent hover:bg-accent/10"
+                            }`}>
+                            {inPack ? "✓ Nel pack" : "+ Pack"}
+                          </button>
+                        );
+                      })()}
                       <button onClick={() => openEditQuestion(q)} className="text-accent hover:underline text-sm">Modifica</button>
                       <button onClick={() => deleteQuestion(q.id)} className="text-danger hover:underline text-sm">Elimina</button>
                     </div>
