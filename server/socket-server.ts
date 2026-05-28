@@ -59,7 +59,19 @@ io.use(async (socket, next) => {
   next();
 });
 
+// activeTimers contiene i riferimenti agli setInterval per il countdown della domanda corrente.
+// NodeJS.Timeout non è serializzabile → la Map resta in memoria. Quello che persiste in DB è
+// `Game.currentQuestionDeadline` (vedi clearQuestionTimer / sendNextQuestion), così rejoin e
+// client polling (post-cutover Vercel) sanno quanto manca senza dipendere dalla memoria.
 const activeTimers = new Map<string, NodeJS.Timeout>();
+
+// Cancella il timer in memoria e azzera la deadline persistita. Usato in ogni cleanup
+// (reveal, judgment, finishGame, host:endQuestion) per mantenere DB e memoria coerenti.
+async function clearQuestionTimer(gameId: string) {
+  const t = activeTimers.get(gameId);
+  if (t) { clearInterval(t); activeTimers.delete(gameId); }
+  await prisma.game.update({ where: { id: gameId }, data: { currentQuestionDeadline: null } });
+}
 // revealInProgress ora persistito su Game.revealInProgress (migration fase 4.b).
 // L'acquisizione del lock usa updateMany con WHERE atomico → safe per worker multipli
 // (importante post-migrazione Vercel, dove l'instance può scalare a N).
@@ -653,6 +665,8 @@ async function sendNextQuestion(gameId: string) {
     remaining--;
     io.to(`game:${gameId}`).emit("game:timer", { remaining });
     if (remaining <= 0) {
+      // handleQuestionEnd chiama sendAnswersForJudgment o revealAnswer, che azzerano la deadline
+      // via clearQuestionTimer. Qui basta liberare la Map in-memory per evitare double-fire.
       clearInterval(timer);
       activeTimers.delete(gameId);
       await handleQuestionEnd(gameId, gq.id, q.id, q.type as QuestionType);
@@ -660,6 +674,11 @@ async function sendNextQuestion(gameId: string) {
   }, 1000);
 
   activeTimers.set(gameId, timer);
+  // Persisti la deadline così che rejoin / polling possano calcolare il tempo rimanente
+  await prisma.game.update({
+    where: { id: gameId },
+    data: { currentQuestionDeadline: new Date(Date.now() + effectiveTimeLimit * 1000) },
+  });
 }
 
 async function handleQuestionEnd(
@@ -688,11 +707,7 @@ async function sendAnswersForJudgment(
   if (acquired.count === 0) return;
 
   try {
-    const existingTimer = activeTimers.get(gameId);
-    if (existingTimer) {
-      clearInterval(existingTimer);
-      activeTimers.delete(gameId);
-    }
+    await clearQuestionTimer(gameId);
 
     const playerAnswers = await prisma.playerAnswer.findMany({
       where: { gameQuestionId },
@@ -730,11 +745,7 @@ async function revealAnswer(
   });
   if (acquired.count === 0) return;
 
-  const existingTimer = activeTimers.get(gameId);
-  if (existingTimer) {
-    clearInterval(existingTimer);
-    activeTimers.delete(gameId);
-  }
+  await clearQuestionTimer(gameId);
 
   const question = await prisma.question.findUnique({
     where: { id: questionId },
@@ -960,8 +971,7 @@ async function finishGame(gameId: string) {
   await prisma.game.update({ where: { id: gameId }, data: { localTurnPlayerId: null } });
   pendingJudgment.delete(gameId);
   clearSpeedrunTimers(gameId);
-  const activeTimer = activeTimers.get(gameId);
-  if (activeTimer) { clearInterval(activeTimer); activeTimers.delete(gameId); }
+  await clearQuestionTimer(gameId);
 
   io.to(`game:${gameId}`).emit("game:finished", {
     players: game.players.map((p) => ({ id: p.id, nickname: p.nickname, score: p.score, emoji: p.emoji, avatarUrl: p.avatarUrl, eliminated: p.eliminated, wrongCount: p.wrongCount, streak: p.streak, bestStreak: p.bestStreak })),
@@ -1389,9 +1399,7 @@ io.on("connection", (socket) => {
   socket.on("host:endQuestion", async ({ gameId }) => {
     const current = currentQuestionByGame.get(gameId);
     if (!current) return;
-    // Ferma eventuale timer attivo
-    const timer = activeTimers.get(gameId);
-    if (timer) { clearInterval(timer); activeTimers.delete(gameId); }
+    await clearQuestionTimer(gameId);
     // In modalità presentatore i giudizi sono già stati dati individualmente via host:local-judge,
     // quindi saltiamo la fase di giudizio e andiamo direttamente al reveal.
     const game = await prisma.game.findUnique({ where: { id: gameId } });
