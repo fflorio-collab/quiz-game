@@ -60,7 +60,9 @@ io.use(async (socket, next) => {
 });
 
 const activeTimers = new Map<string, NodeJS.Timeout>();
-const revealInProgress = new Set<string>();
+// revealInProgress ora persistito su Game.revealInProgress (migration fase 4.b).
+// L'acquisizione del lock usa updateMany con WHERE atomico → safe per worker multipli
+// (importante post-migrazione Vercel, dove l'instance può scalare a N).
 // Partite in attesa di giudizio host (OPEN_ANSWER / IMAGE_GUESS)
 const pendingJudgment = new Map<string, { gameQuestionId: string; questionId: string }>();
 // Speedrun: timer globale della partita
@@ -678,8 +680,12 @@ async function sendAnswersForJudgment(
   gameQuestionId: string,
   questionId: string
 ) {
-  if (revealInProgress.has(gameId)) return;
-  revealInProgress.add(gameId);
+  // Lock atomico: solo chi vince l'updateMany entra. Concorrenti escono qui.
+  const acquired = await prisma.game.updateMany({
+    where: { id: gameId, revealInProgress: false },
+    data: { revealInProgress: true },
+  });
+  if (acquired.count === 0) return;
 
   try {
     const existingTimer = activeTimers.get(gameId);
@@ -707,7 +713,7 @@ async function sendAnswersForJudgment(
 
     io.to(`game:${gameId}`).emit("game:judge-answers", judgingData);
   } finally {
-    revealInProgress.delete(gameId);
+    await prisma.game.update({ where: { id: gameId }, data: { revealInProgress: false } });
   }
 }
 
@@ -717,8 +723,12 @@ async function revealAnswer(
   questionId: string,
   questionType: QuestionType
 ) {
-  if (revealInProgress.has(gameId)) return;
-  revealInProgress.add(gameId);
+  // Lock atomico (vedi sendAnswersForJudgment).
+  const acquired = await prisma.game.updateMany({
+    where: { id: gameId, revealInProgress: false },
+    data: { revealInProgress: true },
+  });
+  if (acquired.count === 0) return;
 
   const existingTimer = activeTimers.get(gameId);
   if (existingTimer) {
@@ -818,7 +828,7 @@ async function revealAnswer(
       }
     }
   } finally {
-    revealInProgress.delete(gameId);
+    await prisma.game.update({ where: { id: gameId }, data: { revealInProgress: false } });
   }
 }
 
