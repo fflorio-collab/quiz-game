@@ -1,8 +1,30 @@
 import { prisma } from "@/lib/prisma";
-import { broadcastToGame } from "@/lib/pusher-server";
+import { broadcastToGame, broadcastToHost } from "@/lib/pusher-server";
 import { describeGameMode } from "@/lib/gameMode";
 import { xpForGame, levelFromXp } from "@/lib/gamification/xp";
 import { evaluateBadgeUnlocks } from "@/lib/gamification/badges";
+import { QUESTION_TYPE_META, getTypeLabel } from "@/lib/questionTypes";
+import { broadcastLobby, emitLocalRoundState } from "@/lib/game-broadcasts";
+import { resolveTimeLimit, buildJudgeAnswersData, buildRevealDataFromDb } from "@/lib/game-snapshot";
+import type { QuestionType } from "@/types/socket";
+
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// Per modalità presentatore: testo della risposta corretta da mostrare all'host
+function resolveCorrectAnswerText(question: {
+  openAnswer: string | null;
+  answers: { text: string; isCorrect: boolean }[];
+}): string {
+  const correct = question.answers.find((a) => a.isCorrect);
+  return correct?.text ?? question.openAnswer ?? "";
+}
 
 // Azioni "macro" sulla partita richiamabili sia da API routes Next.js sia
 // (in transizione) da server/socket-server.ts (migration vercel-pusher fase 7).
@@ -24,6 +46,13 @@ export async function clearSpeedrunStateDb(gameId: string) {
   });
 }
 
+export async function startSpeedrunStateDb(gameId: string) {
+  await prisma.game.update({
+    where: { id: gameId },
+    data: { speedrunStartedAt: new Date() },
+  });
+}
+
 export async function clearJudgingDb(gameId: string) {
   await prisma.gameQuestion.updateMany({
     where: { gameId, awaitingJudgment: true },
@@ -37,6 +66,264 @@ export async function clearRevealDb(gameId: string) {
     data: { revealedAt: null },
   });
 }
+
+// ─── Flusso domanda (sendNextQuestion → handleQuestionEnd → reveal/judging) ──
+//
+// Differenza chiave vs server/socket-server.ts: niente setInterval lato server.
+// Il countdown della singola domanda diventa polling client (fase 8): il client
+// legge Game.currentQuestionDeadline e quando il suo timer locale raggiunge 0
+// chiama POST /api/game/[id]/end-question. handleQuestionEnd è atomico (lock
+// via revealInProgress updateMany) → safe contro multiple chiamate concorrenti.
+
+export async function sendNextQuestion(gameId: string): Promise<void> {
+  const game = await prisma.game.findUnique({
+    where: { id: gameId },
+    include: {
+      gameQuestions: {
+        include: { question: { include: { answers: true, category: true } } },
+        orderBy: { order: "asc" },
+      },
+    },
+  });
+  if (!game) return;
+
+  const gq = game.gameQuestions[game.currentIndex];
+  if (!gq) {
+    await finishGame(gameId);
+    return;
+  }
+
+  // "Ultimo in piedi": se è rimasto un solo giocatore attivo, fine partita.
+  if (game.lastManStanding) {
+    const activeCount = await prisma.player.count({ where: { gameId, eliminated: false } });
+    if (activeCount <= 1) {
+      await finishGame(gameId);
+      return;
+    }
+  }
+
+  await prisma.gameQuestion.update({ where: { id: gq.id }, data: { askedAt: new Date() } });
+
+  const q = gq.question;
+  const displayMode = QUESTION_TYPE_META[q.type as QuestionType].displayAnswers;
+  const shuffledAnswers =
+    displayMode === "shuffled" ? shuffle(q.answers)
+    : displayMode === "ordered" ? [...q.answers].sort((a, b) => a.order - b.order)
+    : [];
+
+  const effectiveTimeLimit = resolveTimeLimit(game, q.timeLimit);
+
+  const questionData = {
+    questionId: q.id,
+    gameQuestionId: gq.id,
+    text: q.text,
+    questionType: q.type as QuestionType,
+    answers: shuffledAnswers.map((a) => ({ id: a.id, text: a.text })),
+    timeLimit: effectiveTimeLimit,
+    questionNumber: game.currentIndex + 1,
+    totalQuestions: game.totalQuestions,
+    category: q.category
+      ? { name: q.category.name, icon: q.category.icon, color: q.category.color }
+      : undefined,
+    imageUrl: q.imageUrl ?? null,
+    mediaType: q.mediaType ?? null,
+    wordTemplate: q.wordTemplate ?? null,
+  };
+
+  await clearRevealDb(gameId);
+  await clearJudgingDb(gameId);
+  // Persisti deadline (effectiveTimeLimit<=0 = senza limite manuale, no deadline)
+  await prisma.game.update({
+    where: { id: gameId },
+    data: {
+      awaitingCategoryPick: false,
+      currentQuestionDeadline:
+        effectiveTimeLimit > 0 ? new Date(Date.now() + effectiveTimeLimit * 1000) : null,
+    },
+  });
+
+  await broadcastToGame(gameId, "game:question", questionData);
+
+  if (game.localPartyMode) {
+    const firstActive = await prisma.player.findFirst({
+      where: { gameId, eliminated: false },
+      orderBy: { joinedAt: "asc" },
+    });
+    await prisma.game.update({
+      where: { id: gameId },
+      data: { localTurnPlayerId: firstActive?.id ?? null },
+    });
+    await broadcastToHost(gameId, "game:local-host-info", {
+      correctAnswerText: resolveCorrectAnswerText(q),
+    });
+    await emitLocalRoundState(gameId, gq.id);
+  }
+}
+
+export async function handleQuestionEnd(
+  gameId: string,
+  gameQuestionId: string,
+  questionId: string,
+  questionType: QuestionType,
+): Promise<void> {
+  if (QUESTION_TYPE_META[questionType].requiresJudging) {
+    await sendAnswersForJudgment(gameId, gameQuestionId, questionId);
+  } else {
+    await revealAnswer(gameId, gameQuestionId);
+  }
+}
+
+export async function sendAnswersForJudgment(
+  gameId: string,
+  gameQuestionId: string,
+  questionId: string,
+): Promise<void> {
+  const acquired = await prisma.game.updateMany({
+    where: { id: gameId, revealInProgress: false },
+    data: { revealInProgress: true },
+  });
+  if (acquired.count === 0) return;
+
+  try {
+    await clearQuestionDeadlineDb(gameId);
+    await prisma.gameQuestion.update({
+      where: { id: gameQuestionId },
+      data: { awaitingJudgment: true },
+    });
+    const judgingData = await buildJudgeAnswersData(gameQuestionId, questionId);
+    await broadcastToGame(gameId, "game:judge-answers", judgingData);
+  } finally {
+    await prisma.game.update({ where: { id: gameId }, data: { revealInProgress: false } });
+  }
+}
+
+export async function revealAnswer(gameId: string, gameQuestionId: string): Promise<void> {
+  const acquired = await prisma.game.updateMany({
+    where: { id: gameId, revealInProgress: false },
+    data: { revealInProgress: true },
+  });
+  if (acquired.count === 0) return;
+  await clearQuestionDeadlineDb(gameId);
+
+  try {
+    await clearJudgingDb(gameId);
+    await prisma.game.update({
+      where: { id: gameId },
+      data: { currentIndex: { increment: 1 } },
+    });
+    await prisma.gameQuestion.update({
+      where: { id: gameQuestionId },
+      data: { revealedAt: new Date() },
+    });
+
+    const revealData = await buildRevealDataFromDb(gameQuestionId);
+    if (!revealData) return;
+
+    await broadcastToGame(gameId, "game:reveal", revealData);
+
+    // Aggiorna leaderboard live
+    const players = await prisma.player.findMany({
+      where: { gameId },
+      orderBy: { score: "desc" },
+    });
+    await broadcastToGame(gameId, "game:leaderboard", {
+      players: players.map((p) => ({
+        id: p.id, nickname: p.nickname, score: p.score, emoji: p.emoji, avatarUrl: p.avatarUrl,
+        eliminated: p.eliminated, wrongCount: p.wrongCount, fiftyFiftyUsed: p.fiftyFiftyUsed,
+        skipUsed: p.skipUsed, streak: p.streak, bestStreak: p.bestStreak, pendingWager: p.pendingWager,
+      })),
+    });
+
+    // Speedrun auto-advance dopo 2s. Nel modello stateless Vercel non possiamo usare setTimeout
+    // affidabile: il timer client polling rileva game.currentQuestionDeadline=null e chiama
+    // POST /api/game/[id]/next. Documentato in fase 8.
+  } finally {
+    await prisma.game.update({ where: { id: gameId }, data: { revealInProgress: false } });
+  }
+}
+
+// Marca "in attesa di scelta categoria" e broadcast della griglia categorie.
+// Ricalcolata da DB: chi ha quante domande rimaste.
+export async function emitCategoryGrid(gameId: string): Promise<void> {
+  const game = await prisma.game.findUnique({
+    where: { id: gameId },
+    include: {
+      gameQuestions: { include: { question: { include: { category: true } } } },
+    },
+  });
+  if (!game || !game.categoryPickMode) return;
+  const counts = new Map<string, { name: string; color: string | null; icon: string | null; count: number }>();
+  for (const gq of game.gameQuestions) {
+    if (gq.askedAt) continue;
+    const k = gq.question.categoryId;
+    if (!counts.has(k)) {
+      counts.set(k, {
+        name: gq.question.category?.name ?? "?",
+        color: gq.question.category?.color ?? null,
+        icon: gq.question.category?.icon ?? null,
+        count: 0,
+      });
+    }
+    counts.get(k)!.count += 1;
+  }
+  const categories = Array.from(counts.entries()).map(([id, v]) => ({
+    id,
+    name: v.name,
+    color: v.color,
+    icon: v.icon,
+    remaining: v.count,
+  }));
+
+  await clearRevealDb(gameId);
+  await clearJudgingDb(gameId);
+  await prisma.game.update({
+    where: { id: gameId },
+    data: { awaitingCategoryPick: true },
+  });
+  await broadcastToGame(gameId, "game:category-grid", { categories });
+}
+
+// Jeopardy: broadcast della griglia categoria × valore con flag "consumed"
+export async function emitJeopardyGrid(gameId: string): Promise<void> {
+  const game = await prisma.game.findUnique({
+    where: { id: gameId },
+    include: {
+      gameQuestions: {
+        orderBy: { order: "asc" },
+        include: { question: { include: { category: true } } },
+      },
+    },
+  });
+  if (!game || !game.jeopardyMode) return;
+
+  const byCat = new Map<string, typeof game.gameQuestions>();
+  for (const gq of game.gameQuestions) {
+    const k = gq.question.categoryId;
+    if (!byCat.has(k)) byCat.set(k, [] as typeof game.gameQuestions);
+    byCat.get(k)!.push(gq);
+  }
+  const cells: { gameQuestionId: string; categoryId: string; categoryName: string; categoryColor: string | null; value: number; consumed: boolean }[] = [];
+  byCat.forEach((list) => {
+    list.sort((a, b) => a.question.points - b.question.points);
+    list.forEach((gq) => {
+      cells.push({
+        gameQuestionId: gq.id,
+        categoryId: gq.question.categoryId,
+        categoryName: gq.question.category?.name ?? "?",
+        categoryColor: gq.question.category?.color ?? null,
+        value: gq.question.points,
+        consumed: !!gq.askedAt,
+      });
+    });
+  });
+  await clearRevealDb(gameId);
+  await clearJudgingDb(gameId);
+  await broadcastToGame(gameId, "game:jeopardy-grid", { cells });
+}
+
+// Utility unused-but-imported reference per evitare il "unused import" warning su getTypeLabel
+// (resta importato perché potrebbe servire ad usi futuri di build* helpers in questo modulo).
+void getTypeLabel;
 
 // ─── finishGame ──────────────────────────────────────────────────────────────
 

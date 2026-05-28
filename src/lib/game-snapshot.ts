@@ -54,7 +54,7 @@ function mapPlayer(p: {
   };
 }
 
-function resolveTimeLimit(
+export function resolveTimeLimit(
   game: { tournamentModes: string | null; tournamentTimeLimits: string | null; timeLimitOverride: number | null; speedrunDuration: number | null; totalQuestions: number; currentIndex: number },
   questionDefaultTimeLimit: number,
 ): number {
@@ -98,7 +98,7 @@ async function findCurrentQuestionDb(gameId: string) {
   });
 }
 
-async function buildJudgeAnswersData(
+export async function buildJudgeAnswersData(
   gameQuestionId: string,
   questionId: string,
 ): Promise<JudgeAnswersData> {
@@ -117,7 +117,7 @@ async function buildJudgeAnswersData(
   };
 }
 
-async function buildRevealDataFromDb(gameQuestionId: string): Promise<RevealData | null> {
+export async function buildRevealDataFromDb(gameQuestionId: string): Promise<RevealData | null> {
   const gq = await prisma.gameQuestion.findUnique({
     where: { id: gameQuestionId },
     include: {
