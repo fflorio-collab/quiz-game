@@ -250,6 +250,51 @@ type DuelRuntime = {
 };
 const duelByGame = new Map<string, DuelRuntime>();
 
+// ─── Fase 4.h: persistenza duello ──────────────────────────────────────
+// La Map duelByGame resta in memoria perché il tick a 250ms vi opera direttamente
+// (NodeJS.Timeout non è serializzabile; un write a DB ogni 250ms saturerebbe Neon free).
+// In parallelo facciamo upsert su Duel ad ogni evento "slow" (start, pause, judge,
+// turn switch, nuova domanda, fine). Così:
+//  - admin/debug query vedono lo stato di un duello attivo
+//  - rejoin cross-worker (post-Vercel) potrà ricostruire DuelRuntime dal DB
+//  - tolerance ~250ms sui playerXTimeMs (l'ultima accumulazione del tick).
+// La tick-loop stessa NON persiste (verrà sostituita in fase 8 da polling client).
+
+async function persistDuel(r: DuelRuntime, ended?: { winnerId: string | null }) {
+  const data = {
+    playerAId: r.state.playerA.id,
+    playerBId: r.state.playerB.id,
+    currentTurnPlayerId: r.state.activePlayerId,
+    durationSec: r.state.durationSec,
+    playerATimeMs: r.state.playerA.timeLeftMs,
+    playerBTimeMs: r.state.playerB.timeLeftMs,
+    lastTickAt: new Date(r.lastTickAt),
+    paused: r.state.paused,
+    currentQuestionText: r.state.question?.text ?? "",
+    currentCorrectAnswer: r.correctAnswer,
+    poolJson: JSON.stringify(r.pool),
+    maskJson: r.mask
+      ? JSON.stringify({
+          chars: r.mask.chars,
+          revealed: Array.from(r.mask.revealed),
+          blockedIdx: r.mask.blockedIdx,
+          lastRevealAt: r.mask.lastRevealAt,
+        })
+      : "{}",
+    endedAt: ended ? new Date() : null,
+    winnerId: ended?.winnerId ?? null,
+  };
+  await prisma.duel.upsert({
+    where: { gameId: r.gameId },
+    create: { gameId: r.gameId, ...data },
+    update: data,
+  });
+}
+
+async function deleteDuel(gameId: string) {
+  await prisma.duel.deleteMany({ where: { gameId } });
+}
+
 const REVEAL_INTERVAL_MS = 3000;
 const VOWELS = /[AEIOUÀÈÉÌÒÙ]/;
 
@@ -327,6 +372,8 @@ function endDuel(r: DuelRuntime, loserId: string) {
     winnerNickname: winner.nickname,
     loserNickname: loser.nickname,
   });
+  // Persisti l'esito (fire-and-forget perché endDuel è chiamato anche dalla tick sincrona)
+  persistDuel(r, { winnerId: winner.id }).catch((e) => console.error("persistDuel endDuel error", e));
 }
 
 function loadNextDuelQuestion(r: DuelRuntime) {
@@ -1986,6 +2033,7 @@ io.on("connection", (socket) => {
       };
       loadNextDuelQuestion(runtime);
       duelByGame.set(gameId, runtime);
+      await persistDuel(runtime);
 
       // Tick ogni 250ms: timer + rivelazione progressiva + broadcast
       runtime.tickInterval = setInterval(() => {
@@ -2004,7 +2052,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("duel:stop", ({ gameId }) => {
+  socket.on("duel:stop", async ({ gameId }) => {
     const r = duelByGame.get(gameId);
     if (!r) return;
     // Chi è attivo perde per stop manuale (raro — mantieni cleanup)
@@ -2012,10 +2060,11 @@ io.on("connection", (socket) => {
     r.state.finished = true;
     io.to(`game:${gameId}`).emit("duel:state", r.state);
     duelByGame.delete(gameId);
+    await deleteDuel(gameId);
   });
 
   // Host mette in pausa / riprende il duello (ferma timer + rivelazione lettere)
-  socket.on("duel:pause", ({ gameId, paused }) => {
+  socket.on("duel:pause", async ({ gameId, paused }) => {
     const r = duelByGame.get(gameId);
     if (!r || r.state.finished) return;
     if (paused && !r.state.paused) {
@@ -2030,10 +2079,11 @@ io.on("connection", (socket) => {
       r.state.paused = false;
     }
     io.to(`game:${gameId}`).emit("duel:state", r.state);
+    await persistDuel(r);
   });
 
   // Host giudica la risposta detta a voce dal player attivo: in ogni caso turno passa
-  socket.on("duel:judge", ({ gameId, isCorrect }) => {
+  socket.on("duel:judge", async ({ gameId, isCorrect }) => {
     const r = duelByGame.get(gameId);
     if (!r || r.state.finished) return;
     // Prima accumula il tempo speso dal player attivo finora
@@ -2047,6 +2097,7 @@ io.on("connection", (socket) => {
     switchDuelTurn(r);
     loadNextDuelQuestion(r);
     io.to(`game:${gameId}`).emit("duel:state", r.state);
+    await persistDuel(r);
   });
 
   socket.on("disconnect", async () => {
