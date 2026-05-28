@@ -1,6 +1,39 @@
 import { prisma } from "@/lib/prisma";
 import type { DuelState } from "@/types/socket";
 
+const REVEAL_INTERVAL_MS = 3000;
+const VOWELS = /[AEIOUÀÈÉÌÒÙ]/;
+
+export type DuelMask = {
+  chars: string[];
+  revealed: number[];
+  blockedIdx: number;
+  lastRevealAt: number;
+};
+
+export function buildMask(word: string): DuelMask {
+  const chars = word.toUpperCase().split("");
+  let blockedIdx = -1;
+  for (let i = chars.length - 1; i >= 0; i--) {
+    if (VOWELS.test(chars[i])) { blockedIdx = i; break; }
+  }
+  if (blockedIdx === -1) blockedIdx = chars.length - 1;
+  const revealed: number[] = [];
+  if (chars.length > 0 && blockedIdx !== 0) revealed.push(0);
+  else if (chars.length > 1) revealed.push(chars.length - 1);
+  return { chars, revealed, blockedIdx, lastRevealAt: Date.now() };
+}
+
+export function renderMask(mask: DuelMask): string {
+  return mask.chars
+    .map((c, i) =>
+      /[A-ZÀÈÉÌÒÙ]/.test(c) ? (mask.revealed.includes(i) ? c : "_") : c,
+    )
+    .join(" ");
+}
+
+export { REVEAL_INTERVAL_MS };
+
 // Helpers per ricostruire DuelState dal DB (migration vercel-pusher fase 7).
 // Duplicano la logica di loadDuelStateFromDB / applyElapsed di server/socket-server.ts
 // così le API routes Next.js possono operare senza Map in-memory.
