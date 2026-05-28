@@ -26,6 +26,25 @@ function resolveCorrectAnswerText(question: {
   return correct?.text ?? question.openAnswer ?? "";
 }
 
+// Risolve i punti base per la domanda corrente: pointsOverrides per-round (torneo)
+// se presente e > 0, altrimenti il default della Question.
+export function resolveBasePoints(
+  game: { pointsOverrides: string | null; tournamentModes: string | null; totalQuestions: number; currentIndex: number },
+  questionDefault: number,
+): number {
+  if (!game.pointsOverrides) return questionDefault;
+  const values = game.pointsOverrides.split(",").map((n) => Number(n));
+  const modes = game.tournamentModes ? game.tournamentModes.split(",") : null;
+  if (!modes || modes.length <= 1) {
+    const v = values[0];
+    return v && v > 0 ? v : questionDefault;
+  }
+  const perRound = Math.max(1, Math.floor(game.totalQuestions / modes.length));
+  const roundIdx = Math.min(modes.length - 1, Math.floor(game.currentIndex / perRound));
+  const v = values[roundIdx];
+  return v && v > 0 ? v : questionDefault;
+}
+
 // Azioni "macro" sulla partita richiamabili sia da API routes Next.js sia
 // (in transizione) da server/socket-server.ts (migration vercel-pusher fase 7).
 // I broadcast usano Pusher (non Socket.io). socket-server.ts viene rimosso al cutover.
