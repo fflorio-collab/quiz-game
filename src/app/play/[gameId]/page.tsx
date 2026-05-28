@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { usePusherChannel } from "@/lib/pusher-client";
+import { useGameTick } from "@/lib/use-game-tick";
 import { playSound, getSoundEnabled, setSoundEnabled } from "@/lib/sound";
 import type { QuestionData, RevealData, PlayerInfo, DuelState } from "@/types/socket";
 import MediaDisplay from "@/components/MediaDisplay";
@@ -109,6 +110,8 @@ export default function PlayPage() {
   const router = useRouter();
   // Migration vercel-pusher fase 7.6: usePusherChannel al posto di useSocket.
   const channel = usePusherChannel(gameId ? `game-${gameId}` : null);
+  // Fase 8: polling timer (domanda + speedrun + duel).
+  const tick = useGameTick(gameId ?? null, { intervalMs: 2000 });
 
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [nickname, setNickname] = useState("");
@@ -154,8 +157,8 @@ export default function PlayPage() {
   };
   const firstBlankRef = useRef<HTMLInputElement>(null);
 
-  // Countdown locale per la domanda (fase 8 lo sostituirà con polling del deadline server).
-  // Decrementa remaining ogni secondo durante QUESTION/ANSWERED e suona tick negli ultimi 5s.
+  // Countdown locale 1s tra un tick e l'altro per animazione fluida. Il polling
+  // (vedi sotto) sovrascrive `remaining` con la verità dal server ogni 2s.
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (tickRef.current) clearInterval(tickRef.current);
@@ -184,6 +187,18 @@ export default function PlayPage() {
       if (speedrunRef.current) clearInterval(speedrunRef.current);
     };
   }, [speedrunRemaining !== null]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fase 8: sincronizza timer + duel dal tick server.
+  useEffect(() => {
+    if (!tick) return;
+    if (tick.questionRemaining !== null && (phase === "QUESTION" || phase === "ANSWERED")) {
+      setRemaining(tick.questionRemaining);
+    }
+    if (tick.speedrunRemaining !== speedrunRemaining) {
+      setSpeedrunRemaining(tick.speedrunRemaining);
+    }
+    if (tick.duel) setDuel(tick.duel);
+  }, [tick, phase, speedrunRemaining]);
 
   useEffect(() => {
     const pid = localStorage.getItem("playerId");

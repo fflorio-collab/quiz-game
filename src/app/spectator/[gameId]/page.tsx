@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { usePusherChannel } from "@/lib/pusher-client";
+import { useGameTick } from "@/lib/use-game-tick";
 import type {
   PlayerInfo,
   QuestionData,
@@ -19,6 +20,9 @@ export default function SpectatorViewerPage() {
   const router = useRouter();
   // Migration vercel-pusher fase 7.6: usePusherChannel al posto di useSocket.
   const channel = usePusherChannel(gameId ? `game-${gameId}` : null);
+  // Fase 8: polling del tick per timer accurati + auto-fine domanda.
+  // Disabilita quando la partita è finita: niente da rinfrescare.
+  const tick = useGameTick(gameId ?? null, { intervalMs: 2000 });
 
   const [code, setCode] = useState("");
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
@@ -35,8 +39,8 @@ export default function SpectatorViewerPage() {
   const [categoryGrid, setCategoryGrid] = useState<CategoryGridData | null>(null);
   const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
 
-  // Countdown locale: fase 8 lo sostituirà con polling dello stato server.
-  // Per ora decrementa il timer client-side a partire da q.timeLimit.
+  // Countdown locale 1s tra un tick e l'altro per animazione fluida; la verità
+  // (vedi sotto) la sovrascrive dal server ogni 2s.
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (tickRef.current) clearInterval(tickRef.current);
@@ -48,6 +52,18 @@ export default function SpectatorViewerPage() {
       if (tickRef.current) clearInterval(tickRef.current);
     };
   }, [phase, question]);
+
+  // Sincronizza i timer dal server tick (fase 8): se c'è una domanda attiva
+  // sovrascrive `remaining` con il valore autoritativo. Speedrun idem.
+  useEffect(() => {
+    if (!tick) return;
+    if (tick.questionRemaining !== null && phase === "QUESTION") {
+      setRemaining(tick.questionRemaining);
+    }
+    if (tick.speedrunRemaining !== speedrunRemaining) {
+      setSpeedrunRemaining(tick.speedrunRemaining);
+    }
+  }, [tick, phase, speedrunRemaining]);
 
   useEffect(() => {
     const saved = localStorage.getItem("spectatorCode");

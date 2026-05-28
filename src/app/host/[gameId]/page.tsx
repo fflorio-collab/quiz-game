@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { usePusherChannel } from "@/lib/pusher-client";
+import { useGameTick } from "@/lib/use-game-tick";
 import { playSound } from "@/lib/sound";
 import type {
   PlayerInfo,
@@ -24,6 +25,10 @@ export default function HostLobbyPage() {
   // Migration vercel-pusher fase 7.6: due canali — game (eventi pubblici) + host (info riservate).
   const gameChannel = usePusherChannel(gameId ? `game-${gameId}` : null);
   const hostChannel = usePusherChannel(gameId ? `host-${gameId}` : null);
+  // Fase 8: polling tick — l'host è il principale candidato a innescare la
+  // fine-domanda automatica (ma il server è idempotente quindi qualunque
+  // client può triggerare). Intervallo 1s per UX più reattiva sulla pagina host.
+  const tick = useGameTick(gameId ?? null, { intervalMs: 1000 });
 
   const [code, setCode] = useState("");
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
@@ -64,7 +69,7 @@ export default function HostLobbyPage() {
     if (saved) setCode(saved);
   }, []);
 
-  // Countdown locale domanda (fase 8 lo sostituirà con polling del deadline DB).
+  // Countdown locale 1s tra i tick polling per animazione fluida.
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (tickRef.current) clearInterval(tickRef.current);
@@ -93,6 +98,18 @@ export default function HostLobbyPage() {
       if (speedrunRef.current) clearInterval(speedrunRef.current);
     };
   }, [speedrunRemaining !== null]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fase 8: sincronizza i timer + duel dal tick server (autoritativo).
+  useEffect(() => {
+    if (!tick) return;
+    if (tick.questionRemaining !== null && phase === "QUESTION") {
+      setRemaining(tick.questionRemaining);
+    }
+    if (tick.speedrunRemaining !== speedrunRemaining) {
+      setSpeedrunRemaining(tick.speedrunRemaining);
+    }
+    if (tick.duel) setDuel(tick.duel);
+  }, [tick, phase, speedrunRemaining]);
 
   // Rejoin via POST /api/game/[id]/snapshot (fase 7.4). Recupera anche duel:host-info.
   useEffect(() => {
