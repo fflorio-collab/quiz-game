@@ -111,6 +111,80 @@ async function buildJudgeAnswersData(
     })),
   };
 }
+
+// ─── Fase 4.f: reveal state ────────────────────────────────────────────
+// currentRevealByGame sostituito da GameQuestion.revealedAt (timestamp non-null = in reveal).
+// Il payload RevealData è ricostruito on-demand. Assume che game.currentIndex sia GIÀ stato
+// incrementato prima della build (in revealAnswer l'increment avviene subito dopo il lock).
+
+async function findActiveReveal(gameId: string): Promise<{ id: string; questionId: string } | null> {
+  return prisma.gameQuestion.findFirst({
+    where: { gameId, revealedAt: { not: null } },
+    orderBy: { revealedAt: "desc" },
+    select: { id: true, questionId: true },
+  });
+}
+
+async function clearReveal(gameId: string) {
+  await prisma.gameQuestion.updateMany({
+    where: { gameId, revealedAt: { not: null } },
+    data: { revealedAt: null },
+  });
+}
+
+async function buildRevealData(gameQuestionId: string): Promise<RevealData | null> {
+  const gq = await prisma.gameQuestion.findUnique({
+    where: { id: gameQuestionId },
+    include: {
+      question: { include: { answers: true } },
+      playerAnswers: { include: { player: true } },
+      game: {
+        include: {
+          gameQuestions: { include: { question: true }, orderBy: { order: "asc" } },
+        },
+      },
+    },
+  });
+  if (!gq) return null;
+
+  const correctAnswer = gq.question.answers.find((a) => a.isCorrect);
+  const correctAnswerText = correctAnswer?.text ?? gq.question.openAnswer ?? "";
+  const questionType = gq.question.type as QuestionType;
+
+  const playerResults = gq.playerAnswers.map((pa) => ({
+    playerId: pa.playerId,
+    nickname: pa.player.nickname,
+    wasCorrect: pa.isCorrect,
+    pointsEarned: pa.pointsEarned,
+    totalScore: pa.player.score,
+    answerText: pa.answerText ?? undefined,
+  }));
+
+  // nextRound: la prossima domanda (currentIndex post-increment) ha tipo diverso?
+  let nextRound: { modeType: QuestionType; modeLabel: string; roundNumber: number; totalRounds: number } | undefined;
+  if (gq.game.tournamentModes) {
+    const modes = gq.game.tournamentModes.split(",") as QuestionType[];
+    const next = gq.game.gameQuestions[gq.game.currentIndex];
+    if (next && next.question.type !== questionType) {
+      const nextModeType = next.question.type as QuestionType;
+      const roundNumber = modes.indexOf(nextModeType) + 1;
+      nextRound = {
+        modeType: nextModeType,
+        modeLabel: getTypeLabel(nextModeType),
+        roundNumber,
+        totalRounds: modes.length,
+      };
+    }
+  }
+
+  return {
+    questionType,
+    correctAnswerId: correctAnswer?.id,
+    correctAnswerText,
+    playerResults,
+    nextRound,
+  };
+}
 // revealInProgress ora persistito su Game.revealInProgress (migration fase 4.b).
 // L'acquisizione del lock usa updateMany con WHERE atomico → safe per worker multipli
 // (importante post-migrazione Vercel, dove l'instance può scalare a N).
@@ -283,7 +357,7 @@ function switchDuelTurn(r: DuelRuntime) {
 // Snapshot dello stato corrente per permettere il rejoin mid-game.
 // Aggiornati dagli handler di sendNextQuestion / revealAnswer / judging.
 const currentQuestionByGame = new Map<string, QuestionData & { startedAt: number }>();
-const currentRevealByGame   = new Map<string, RevealData>();
+// currentRevealByGame: vedi fase 4.f — sostituito da GameQuestion.revealedAt + buildRevealData.
 // currentJudgingByGame: vedi commento sopra su pendingJudgment (fase 4.e).
 
 // Calcola il time limit effettivo per la domanda correntemente attiva.
@@ -389,13 +463,14 @@ async function buildGameStateSnapshot(
   // Caduta libera: esponi le vite previste per la UI
   if (game.livesAllowed) snapshot.livesAllowed = game.livesAllowed;
 
-  // Fonte di verità per "judging in corso": DB (sopravvive a restart worker).
+  // Fonti di verità in DB per le fasi attive (sopravvivono a restart worker).
   const awaitingJudgment = await findAwaitingJudgment(gameId);
+  const activeReveal = await findActiveReveal(gameId);
 
   // Jeopardy: se siamo in attesa di scelta cella (nessuna domanda attiva e nessun reveal), includi la griglia
   if (game.jeopardyMode
       && !currentQuestionByGame.get(gameId)
-      && !currentRevealByGame.get(gameId)
+      && !activeReveal
       && !awaitingJudgment) {
     const grid = await buildJeopardyGrid(gameId);
     if (grid) snapshot.jeopardyGrid = grid;
@@ -403,7 +478,7 @@ async function buildGameStateSnapshot(
   // Scegli categoria: analogamente, se in attesa di scelta categoria, includi la griglia
   if (game.categoryPickMode
       && !currentQuestionByGame.get(gameId)
-      && !currentRevealByGame.get(gameId)
+      && !activeReveal
       && !awaitingJudgment) {
     const grid = await buildCategoryGrid(gameId);
     if (grid) snapshot.categoryGrid = grid;
@@ -416,10 +491,12 @@ async function buildGameStateSnapshot(
   }
 
   // Reveal in corso
-  const reveal = currentRevealByGame.get(gameId);
-  if (reveal) {
-    snapshot.isRevealing = true;
-    snapshot.reveal = reveal;
+  if (activeReveal) {
+    const reveal = await buildRevealData(activeReveal.id);
+    if (reveal) {
+      snapshot.isRevealing = true;
+      snapshot.reveal = reveal;
+    }
     return snapshot;
   }
 
@@ -516,7 +593,7 @@ async function emitJeopardyGrid(gameId: string) {
   if (!grid) return;
   // Pulisce gli snapshot "active" perché siamo in attesa di scelta
   currentQuestionByGame.delete(gameId);
-  currentRevealByGame.delete(gameId);
+  await clearReveal(gameId);
   await clearJudging(gameId);
   io.to(`game:${gameId}`).emit("game:jeopardy-grid", grid);
 }
@@ -590,7 +667,7 @@ async function emitCategoryGrid(gameId: string) {
   const grid = await buildCategoryGrid(gameId);
   if (!grid) return;
   currentQuestionByGame.delete(gameId);
-  currentRevealByGame.delete(gameId);
+  await clearReveal(gameId);
   await clearJudging(gameId);
   currentCategoryGridByGame.set(gameId, grid);
   io.to(`game:${gameId}`).emit("game:category-grid", grid);
@@ -681,7 +758,7 @@ async function sendNextQuestion(gameId: string) {
   };
 
   // Pulisci snapshot precedenti (reveal/judging) e memorizza la nuova domanda attiva
-  currentRevealByGame.delete(gameId);
+  await clearReveal(gameId);
   await clearJudging(gameId);
   currentQuestionByGame.set(gameId, { ...questionData, startedAt: Date.now() });
 
@@ -778,8 +855,11 @@ async function revealAnswer(
   gameId: string,
   gameQuestionId: string,
   questionId: string,
-  questionType: QuestionType
+  // questionType resta nei parametri per compat: oggi è derivabile da DB,
+  // ma chi chiama l'aveva già in mano (handleQuestionEnd, host:endQuestion).
+  _questionType: QuestionType
 ) {
+  void _questionType;
   // Lock atomico (vedi sendAnswersForJudgment).
   const acquired = await prisma.game.updateMany({
     where: { id: gameId, revealInProgress: false },
@@ -789,77 +869,28 @@ async function revealAnswer(
 
   await clearQuestionTimer(gameId);
 
-  const question = await prisma.question.findUnique({
-    where: { id: questionId },
-    include: { answers: true },
-  });
   try {
-    if (!question) return;
+    // Verifica esistenza domanda prima di toccare lo stato
+    const exists = await prisma.question.findUnique({ where: { id: questionId }, select: { id: true } });
+    if (!exists) return;
 
-    const correctAnswer = question.answers.find((a) => a.isCorrect);
-    const correctAnswerText = correctAnswer?.text ?? question.openAnswer ?? "";
-
-    const playerAnswers = await prisma.playerAnswer.findMany({
-      where: { gameQuestionId },
-      include: { player: true },
-    });
-
-    const playerResults = playerAnswers.map((pa) => ({
-      playerId: pa.playerId,
-      nickname: pa.player.nickname,
-      wasCorrect: pa.isCorrect,
-      pointsEarned: pa.pointsEarned,
-      totalScore: pa.player.score,
-      answerText: pa.answerText ?? undefined,
-    }));
-
-    // Calcola se la prossima domanda apre un nuovo round di un torneo
-    const gameForRound = await prisma.game.findUnique({
-      where: { id: gameId },
-      include: {
-        gameQuestions: {
-          include: { question: true },
-          orderBy: { order: "asc" },
-        },
-      },
-    });
-    let nextRound: { modeType: QuestionType; modeLabel: string; roundNumber: number; totalRounds: number } | undefined;
-    if (gameForRound?.tournamentModes) {
-      const modes = gameForRound.tournamentModes.split(",") as QuestionType[];
-      const nextIdx = gameForRound.currentIndex + 1; // dopo increment
-      const next = gameForRound.gameQuestions[nextIdx];
-      const currentModeType = questionType;
-      if (next && next.question.type !== currentModeType) {
-        const nextModeType = next.question.type as QuestionType;
-        const roundNumber = modes.indexOf(nextModeType) + 1;
-        nextRound = {
-          modeType: nextModeType,
-          modeLabel: getTypeLabel(nextModeType),
-          roundNumber,
-          totalRounds: modes.length,
-        };
-      }
-    }
-
-    const revealData: RevealData = {
-      questionType,
-      correctAnswerId: correctAnswer?.id,
-      correctAnswerText,
-      playerResults,
-      nextRound,
-    };
-
-    // Salva snapshot per eventuali rejoin durante la fase reveal
+    // Transizione di stato: increment currentIndex + segna revealedAt sulla GQ.
+    // Da qui in poi buildRevealData usa game.currentIndex post-increment per nextRound.
     currentQuestionByGame.delete(gameId);
     await clearJudging(gameId);
-    currentRevealByGame.set(gameId, revealData);
-
-    io.to(`game:${gameId}`).emit("game:reveal", revealData);
-
     await prisma.game.update({
       where: { id: gameId },
       data: { currentIndex: { increment: 1 } },
     });
+    await prisma.gameQuestion.update({
+      where: { id: gameQuestionId },
+      data: { revealedAt: new Date() },
+    });
+
+    const revealData = await buildRevealData(gameQuestionId);
+    if (!revealData) return;
+
+    io.to(`game:${gameId}`).emit("game:reveal", revealData);
 
     const game = await prisma.game.findUnique({
       where: { id: gameId },
@@ -1006,10 +1037,10 @@ async function finishGame(gameId: string) {
 
   // Pulisci tutti gli snapshot in memoria per questa partita
   currentQuestionByGame.delete(gameId);
-  currentRevealByGame.delete(gameId);
   currentCategoryGridByGame.delete(gameId);
-  // localTurnByGame + awaitingJudgment ora in DB → reset persistente (fase 4.a/4.e)
+  // Reset campi di stato runtime persistiti in DB (fase 4.a/4.e/4.f)
   await prisma.game.update({ where: { id: gameId }, data: { localTurnPlayerId: null } });
+  await clearReveal(gameId);
   await clearJudging(gameId);
   await clearSpeedrunTimers(gameId);
   await clearQuestionTimer(gameId);
