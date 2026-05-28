@@ -65,8 +65,8 @@ const revealInProgress = new Set<string>();
 const pendingJudgment = new Map<string, { gameQuestionId: string; questionId: string }>();
 // Speedrun: timer globale della partita
 const speedrunState = new Map<string, { endTimeout: NodeJS.Timeout; tickInterval: NodeJS.Timeout; startedAt: number; durationSec: number }>();
-// Modalità presentatore: giocatore di turno per-partita (highlight "tocca a te")
-const localTurnByGame = new Map<string, string | null>();
+// Modalità presentatore: il giocatore di turno è ora persistito in Game.localTurnPlayerId
+// (migration vercel-pusher, fase 4.a — niente più Map in-memory).
 // "Scegli categoria": griglia corrente memorizzata per rejoin
 const currentCategoryGridByGame = new Map<string, CategoryGridData>();
 
@@ -471,11 +471,14 @@ async function buildLocalRoundState(
   gameQuestionId: string,
   players: { id: string }[]
 ): Promise<LocalRoundState> {
-  const answers = await prisma.playerAnswer.findMany({ where: { gameQuestionId } });
+  const [answers, game] = await Promise.all([
+    prisma.playerAnswer.findMany({ where: { gameQuestionId } }),
+    prisma.game.findUnique({ where: { id: gameId }, select: { localTurnPlayerId: true } }),
+  ]);
   const judgments: Record<string, boolean | null> = {};
   for (const p of players) judgments[p.id] = null;
   for (const a of answers) judgments[a.playerId] = a.isCorrect;
-  const activePlayerId = localTurnByGame.get(gameId) ?? null;
+  const activePlayerId = game?.localTurnPlayerId ?? null;
   return { gameQuestionId, judgments, activePlayerId };
 }
 
@@ -628,7 +631,10 @@ async function sendNextQuestion(gameId: string) {
       where: { gameId, eliminated: false },
       orderBy: { joinedAt: "asc" },
     });
-    localTurnByGame.set(gameId, firstActive?.id ?? null);
+    await prisma.game.update({
+      where: { id: gameId },
+      data: { localTurnPlayerId: firstActive?.id ?? null },
+    });
     io.to(`host:${gameId}`).emit("game:local-host-info", {
       correctAnswerText: resolveCorrectAnswerText(q),
     });
@@ -940,7 +946,8 @@ async function finishGame(gameId: string) {
   currentRevealByGame.delete(gameId);
   currentJudgingByGame.delete(gameId);
   currentCategoryGridByGame.delete(gameId);
-  localTurnByGame.delete(gameId);
+  // localTurnByGame ora in DB → reset persistente (migration fase 4.a)
+  await prisma.game.update({ where: { id: gameId }, data: { localTurnPlayerId: null } });
   pendingJudgment.delete(gameId);
   clearSpeedrunTimers(gameId);
   const activeTimer = activeTimers.get(gameId);
@@ -1348,7 +1355,7 @@ io.on("connection", (socket) => {
       const player = await prisma.player.findUnique({ where: { id: playerId } });
       if (!player || player.gameId !== gameId || player.eliminated) return;
     }
-    localTurnByGame.set(gameId, playerId);
+    await prisma.game.update({ where: { id: gameId }, data: { localTurnPlayerId: playerId } });
     const current = currentQuestionByGame.get(gameId);
     if (current) await emitLocalRoundState(gameId, current.gameQuestionId);
   });
@@ -1591,8 +1598,11 @@ io.on("connection", (socket) => {
 
       // Auto-advance del turno: se il giocatore giudicato era quello di turno, passa al prossimo
       // non giudicato e non eliminato (in ordine di ingresso lobby).
-      const currentTurn = localTurnByGame.get(gameId);
-      if (currentTurn === playerId) {
+      const turnGame = await prisma.game.findUnique({
+        where: { id: gameId },
+        select: { localTurnPlayerId: true },
+      });
+      if (turnGame?.localTurnPlayerId === playerId) {
         const candidates = await prisma.player.findMany({
           where: { gameId, eliminated: false },
           orderBy: { joinedAt: "asc" },
@@ -1600,7 +1610,10 @@ io.on("connection", (socket) => {
         const judged = await prisma.playerAnswer.findMany({ where: { gameQuestionId: current.gameQuestionId } });
         const judgedIds = new Set(judged.map((a) => a.playerId));
         const next = candidates.find((p) => !judgedIds.has(p.id));
-        localTurnByGame.set(gameId, next?.id ?? null);
+        await prisma.game.update({
+          where: { id: gameId },
+          data: { localTurnPlayerId: next?.id ?? null },
+        });
       }
 
       await emitLocalRoundState(gameId, current.gameQuestionId);
