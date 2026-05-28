@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useSocket } from "@/lib/useSocket";
+import { usePusherChannel } from "@/lib/pusher-client";
 import { playSound, getSoundEnabled, setSoundEnabled } from "@/lib/sound";
 import type { QuestionData, RevealData, PlayerInfo, DuelState } from "@/types/socket";
 import MediaDisplay from "@/components/MediaDisplay";
@@ -107,7 +107,8 @@ function StreakOverlay({ streak, show }: { streak: number; show: boolean }) {
 export default function PlayPage() {
   const { gameId } = useParams<{ gameId: string }>();
   const router = useRouter();
-  const { socket, isConnected } = useSocket();
+  // Migration vercel-pusher fase 7.6: usePusherChannel al posto di useSocket.
+  const channel = usePusherChannel(gameId ? `game-${gameId}` : null);
 
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [nickname, setNickname] = useState("");
@@ -153,6 +154,37 @@ export default function PlayPage() {
   };
   const firstBlankRef = useRef<HTMLInputElement>(null);
 
+  // Countdown locale per la domanda (fase 8 lo sostituirà con polling del deadline server).
+  // Decrementa remaining ogni secondo durante QUESTION/ANSWERED e suona tick negli ultimi 5s.
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (tickRef.current) clearInterval(tickRef.current);
+    if ((phase !== "QUESTION" && phase !== "ANSWERED") || !question || question.timeLimit <= 0) return;
+    tickRef.current = setInterval(() => {
+      setRemaining((r) => {
+        const next = r > 0 ? r - 1 : 0;
+        if (phase === "QUESTION" && next > 0 && next <= 5) playSound("tick");
+        return next;
+      });
+    }, 1000);
+    return () => {
+      if (tickRef.current) clearInterval(tickRef.current);
+    };
+  }, [phase, question]);
+
+  // Countdown locale per speedrun (decrementa ogni secondo finché c'è una durata attiva).
+  const speedrunRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (speedrunRef.current) clearInterval(speedrunRef.current);
+    if (speedrunRemaining === null || speedrunRemaining <= 0) return;
+    speedrunRef.current = setInterval(() => {
+      setSpeedrunRemaining((r) => (r !== null && r > 0 ? r - 1 : r));
+    }, 1000);
+    return () => {
+      if (speedrunRef.current) clearInterval(speedrunRef.current);
+    };
+  }, [speedrunRemaining !== null]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     const pid = localStorage.getItem("playerId");
     const nick = localStorage.getItem("playerNickname");
@@ -163,116 +195,120 @@ export default function PlayPage() {
     setMyAvatarUrl(localStorage.getItem("playerAvatarUrl") ?? null);
   }, [router]);
 
+  // Rejoin via POST /api/player/[id]/snapshot (fase 7.2).
   useEffect(() => {
-    if (!socket || !playerId || !gameId) return;
-
-    // Rejoin — recupera lo stato corrente della partita
-    socket.emit("player:rejoin", { gameId, playerId }, (res) => {
-      if (!res.success) {
-        // Partita non esistente/finita/player non trovato → torna al form
-        localStorage.removeItem("playerId");
-        localStorage.removeItem("playerGameId");
-        localStorage.removeItem("playerGameCode");
-        alert(res.error || "Impossibile rientrare in partita");
-        router.push("/player");
-        return;
-      }
-      const s = res.state;
-      // Limiti aiuti per questa partita
-      if (typeof s.fiftyFiftyCount === "number") setFiftyFiftyCount(s.fiftyFiftyCount);
-      if (typeof s.skipCount === "number") setSkipCount(s.skipCount);
-      // Aggiorna punteggio + contatori aiuti dall'elenco players
-      const me = s.players.find((p) => p.id === playerId);
-      if (me) {
-        setMyScore(me.score);
-        if (me.eliminated) setAmIEliminated(true);
-        if (typeof me.fiftyFiftyUsed === "number") setFiftyFiftyUsed(me.fiftyFiftyUsed);
-        if (typeof me.skipUsed === "number") setSkipUsed(me.skipUsed);
-        if (typeof me.streak === "number") setStreak(me.streak);
-        if (typeof me.pendingWager === "number") setPendingWager(me.pendingWager);
-      }
-      const rank = s.players.findIndex((p) => p.id === playerId);
-      if (rank >= 0) setMyRank(rank + 1);
-
-      if (s.gameStatus === "FINISHED") {
-        setFinalRanking(s.finalRanking ?? s.players);
-        setPhase("FINISHED");
-        return;
-      }
-      if (s.gameStatus === "LOBBY") {
-        setPhase("WAITING");
-        if (s.duel && !s.duel.finished) setDuel(s.duel);
-        return;
-      }
-      // 100 Secondi attivo: la schermata duello prevale
-      if (s.duel && !s.duel.finished) setDuel(s.duel);
-      // PLAYING
-      if (s.judging) {
-        // Il player ha già risposto se era presente nelle answers → mostra ANSWERED
-        const answered = s.judging.answers.some((a) => a.playerId === playerId);
-        setPhase(answered ? "ANSWERED" : "WAITING");
-      } else if (s.isRevealing && s.reveal) {
-        setReveal(s.reveal);
-        const myResult = s.reveal.playerResults.find((r) => r.playerId === playerId);
-        if (myResult) setMyScore(myResult.totalScore);
-        setPhase("REVEAL");
-      } else if (s.currentQuestion) {
-        setQuestion(s.currentQuestion);
-        setRemaining(s.remainingTime ?? s.currentQuestion.timeLimit);
-        setQuestionStartTime(Date.now() - ((s.currentQuestion.timeLimit - (s.remainingTime ?? s.currentQuestion.timeLimit)) * 1000));
-        if (s.currentQuestion.questionType === "WORD_COMPLETION" && s.currentQuestion.wordTemplate) {
-          const blanks = s.currentQuestion.wordTemplate.split("").filter((ch: string) => ch === "_");
-          setWordBlanks(new Array(blanks.length).fill(""));
+    if (!playerId || !gameId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/player/${playerId}/snapshot`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ gameId }),
+        });
+        const res = await r.json();
+        if (cancelled) return;
+        if (!r.ok || !res.success) {
+          localStorage.removeItem("playerId");
+          localStorage.removeItem("playerGameId");
+          localStorage.removeItem("playerGameCode");
+          alert(res.error || "Impossibile rientrare in partita");
+          router.push("/player");
+          return;
         }
-        setPhase(s.alreadyAnswered ? "ANSWERED" : "QUESTION");
-      } else {
-        setPhase("WAITING");
+        const s = res.state;
+        if (typeof s.fiftyFiftyCount === "number") setFiftyFiftyCount(s.fiftyFiftyCount);
+        if (typeof s.skipCount === "number") setSkipCount(s.skipCount);
+        if (typeof s.speedrunRemaining === "number") setSpeedrunRemaining(s.speedrunRemaining);
+        const me = s.players.find((p: PlayerInfo) => p.id === playerId);
+        if (me) {
+          setMyScore(me.score);
+          if (me.eliminated) setAmIEliminated(true);
+          if (typeof me.fiftyFiftyUsed === "number") setFiftyFiftyUsed(me.fiftyFiftyUsed);
+          if (typeof me.skipUsed === "number") setSkipUsed(me.skipUsed);
+          if (typeof me.streak === "number") setStreak(me.streak);
+          if (typeof me.pendingWager === "number") setPendingWager(me.pendingWager);
+        }
+        const rank = s.players.findIndex((p: PlayerInfo) => p.id === playerId);
+        if (rank >= 0) setMyRank(rank + 1);
+
+        if (s.gameStatus === "FINISHED") {
+          setFinalRanking(s.finalRanking ?? s.players);
+          setPhase("FINISHED");
+          return;
+        }
+        if (s.gameStatus === "LOBBY") {
+          setPhase("WAITING");
+          if (s.duel && !s.duel.finished) setDuel(s.duel);
+          return;
+        }
+        // 100 Secondi attivo: la schermata duello prevale
+        if (s.duel && !s.duel.finished) setDuel(s.duel);
+        // PLAYING
+        if (s.judging) {
+          const answered = s.judging.answers.some((a: { playerId: string }) => a.playerId === playerId);
+          setPhase(answered ? "ANSWERED" : "WAITING");
+        } else if (s.isRevealing && s.reveal) {
+          setReveal(s.reveal);
+          const myResult = s.reveal.playerResults.find((r: { playerId: string }) => r.playerId === playerId);
+          if (myResult) setMyScore(myResult.totalScore);
+          setPhase("REVEAL");
+        } else if (s.currentQuestion) {
+          setQuestion(s.currentQuestion);
+          setRemaining(s.remainingTime ?? s.currentQuestion.timeLimit);
+          setQuestionStartTime(Date.now() - ((s.currentQuestion.timeLimit - (s.remainingTime ?? s.currentQuestion.timeLimit)) * 1000));
+          if (s.currentQuestion.questionType === "WORD_COMPLETION" && s.currentQuestion.wordTemplate) {
+            const blanks = s.currentQuestion.wordTemplate.split("").filter((ch: string) => ch === "_");
+            setWordBlanks(new Array(blanks.length).fill(""));
+          }
+          setPhase(s.alreadyAnswered ? "ANSWERED" : "QUESTION");
+        } else {
+          setPhase("WAITING");
+        }
+      } catch (e) {
+        if (cancelled) return;
+        alert(e instanceof Error ? e.message : "Errore di rete");
+        router.push("/player");
       }
-    });
+    })();
+    return () => { cancelled = true; };
+  }, [playerId, gameId, router]);
 
-    socket.on("lobby:started", () => setPhase("WAITING"));
+  // Listener Pusher sul canale game-{gameId}.
+  useEffect(() => {
+    if (!channel || !playerId) return;
 
-    socket.on("game:question", (q) => {
+    const onLobbyStarted = () => setPhase("WAITING");
+
+    const onGameQuestion = (q: QuestionData) => {
       setQuestion(q);
       setSelectedAnswerId(null);
       setOpenText("");
       setReveal(null);
       setRemaining(q.timeLimit);
       setQuestionStartTime(Date.now());
-      setHiddenAnswerIds([]); // reset 50/50 per-domanda
+      setHiddenAnswerIds([]);
       setJeopardyWaiting(false);
-
-      // Inizializza i blank per WORD_COMPLETION
       if (q.questionType === "WORD_COMPLETION" && q.wordTemplate) {
         const blanks = q.wordTemplate.split("").filter((ch) => ch === "_");
         setWordBlanks(new Array(blanks.length).fill(""));
       }
-
       setPhase("QUESTION");
-    });
+    };
 
-    socket.on("game:timer", ({ remaining }) => {
-      setRemaining(remaining);
-      // Tick negli ultimi 5 secondi (solo quando non si è già risposto)
-      if (remaining > 0 && remaining <= 5) {
-        playSound("tick");
-      }
-    });
-    socket.on("game:speedrun-timer", ({ remaining }) => setSpeedrunRemaining(remaining));
-    socket.on("game:jeopardy-grid", () => {
+    const onJeopardyGrid = () => {
       setJeopardyWaiting(true);
       setQuestion(null);
       setReveal(null);
       setPhase("WAITING");
-    });
+    };
 
-    socket.on("game:reveal", (data) => {
+    const onReveal = (data: RevealData) => {
       setReveal(data);
       const myResult = data.playerResults.find((r) => r.playerId === playerId);
       if (myResult) {
         setMyScore(myResult.totalScore);
         playSound(myResult.wasCorrect ? "correct" : "wrong");
-        // Se avevo una scommessa attiva, mostra l'animazione vinci/perdi
         if (pendingWager > 0) {
           setWagerAnim(myResult.wasCorrect ? "win" : "lose");
           playSound(myResult.wasCorrect ? "wager-win" : "wager-lose");
@@ -280,9 +316,9 @@ export default function PlayPage() {
         }
       }
       setPhase("REVEAL");
-    });
+    };
 
-    socket.on("game:leaderboard", ({ players }) => {
+    const onLeaderboard = ({ players }: { players: PlayerInfo[] }) => {
       const idx = players.findIndex((p) => p.id === playerId);
       if (idx >= 0) {
         const me = players[idx];
@@ -292,7 +328,6 @@ export default function PlayPage() {
         if (typeof me.fiftyFiftyUsed === "number") setFiftyFiftyUsed(me.fiftyFiftyUsed);
         if (typeof me.skipUsed === "number") setSkipUsed(me.skipUsed);
         if (typeof me.streak === "number") {
-          // Flash animazione quando raggiunge un milestone (2, 4, 7, 10)
           const milestone = [2, 4, 7, 10].includes(me.streak) && me.streak > streak;
           setStreak(me.streak);
           if (milestone) {
@@ -301,43 +336,49 @@ export default function PlayPage() {
             setTimeout(() => setStreakAnim(false), 1500);
           }
         }
-        // Dopo una domanda la scommessa si azzera lato server
         if (typeof me.pendingWager === "number") setPendingWager(me.pendingWager);
       }
-    });
+    };
 
-    socket.on("lobby:updated", ({ players }) => {
+    const onLobbyUpdated = ({ players }: { players: PlayerInfo[] }) => {
       const me = players.find((p) => p.id === playerId);
       if (me?.eliminated) setAmIEliminated(true);
-    });
+    };
 
-    socket.on("game:finished", ({ players }) => {
+    const onFinished = ({ players }: { players: PlayerInfo[] }) => {
       playSound("finish");
       setFinalRanking(players);
       setPhase("FINISHED");
-    });
+    };
 
-    // 100 Secondi: stato duello aggiornato dal server (~250ms)
-    socket.on("duel:state", (st) => setDuel(st));
-    socket.on("duel:ended", ({ winnerNickname, loserNickname }) => {
+    const onDuelState = (st: DuelState) => setDuel(st);
+    const onDuelEnded = ({ winnerNickname, loserNickname }: { winnerNickname: string; loserNickname: string }) => {
       setDuelEndedBanner({ winnerNickname, loserNickname });
       setTimeout(() => { setDuelEndedBanner(null); setDuel(null); }, 5000);
-    });
+    };
+
+    channel.bind("lobby:started", onLobbyStarted);
+    channel.bind("game:question", onGameQuestion);
+    channel.bind("game:jeopardy-grid", onJeopardyGrid);
+    channel.bind("game:reveal", onReveal);
+    channel.bind("game:leaderboard", onLeaderboard);
+    channel.bind("lobby:updated", onLobbyUpdated);
+    channel.bind("game:finished", onFinished);
+    channel.bind("duel:state", onDuelState);
+    channel.bind("duel:ended", onDuelEnded);
 
     return () => {
-      socket.off("lobby:started");
-      socket.off("game:question");
-      socket.off("game:timer");
-      socket.off("game:reveal");
-      socket.off("game:leaderboard");
-      socket.off("lobby:updated");
-      socket.off("game:speedrun-timer");
-      socket.off("game:jeopardy-grid");
-      socket.off("game:finished");
-      socket.off("duel:state");
-      socket.off("duel:ended");
+      channel.unbind("lobby:started", onLobbyStarted);
+      channel.unbind("game:question", onGameQuestion);
+      channel.unbind("game:jeopardy-grid", onJeopardyGrid);
+      channel.unbind("game:reveal", onReveal);
+      channel.unbind("game:leaderboard", onLeaderboard);
+      channel.unbind("lobby:updated", onLobbyUpdated);
+      channel.unbind("game:finished", onFinished);
+      channel.unbind("duel:state", onDuelState);
+      channel.unbind("duel:ended", onDuelEnded);
     };
-  }, [socket, playerId]);
+  }, [channel, playerId, pendingWager, streak]);
 
   // Focus sul primo blank quando la domanda WORD_COMPLETION appare
   useEffect(() => {
@@ -347,26 +388,33 @@ export default function PlayPage() {
   }, [phase, question]);
 
 
+  // Migration vercel-pusher fase 7.6: POST /api/player/[id]/answer al posto di socket.emit.
   const submitMultipleChoice = (answerId: string) => {
-    if (!socket || !playerId || !question || selectedAnswerId) return;
+    if (!playerId || !question || selectedAnswerId) return;
     setSelectedAnswerId(answerId);
-    socket.emit("player:answer", {
-      playerId,
-      gameId,
-      answerId,
-      timeTaken: Date.now() - questionStartTime,
-    });
+    fetch(`/api/player/${playerId}/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        gameId,
+        answerId,
+        timeTaken: Date.now() - questionStartTime,
+      }),
+    }).catch(() => {});
     setPhase("ANSWERED");
   };
 
   const submitTextAnswer = (text: string) => {
-    if (!socket || !playerId || !question || !text.trim()) return;
-    socket.emit("player:answer", {
-      playerId,
-      gameId,
-      answerText: text.trim(),
-      timeTaken: Date.now() - questionStartTime,
-    });
+    if (!playerId || !question || !text.trim()) return;
+    fetch(`/api/player/${playerId}/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        gameId,
+        answerText: text.trim(),
+        timeTaken: Date.now() - questionStartTime,
+      }),
+    }).catch(() => {});
     setPhase("ANSWERED");
   };
 
@@ -384,43 +432,57 @@ export default function PlayPage() {
   const fiftyFiftyRemaining = Math.max(0, fiftyFiftyCount - fiftyFiftyUsed);
   const skipRemaining = Math.max(0, skipCount - skipUsed);
 
-  // Aiuto 50/50 (solo MC): chiede al server 2 risposte sbagliate da nascondere
-  const useFiftyFifty = () => {
-    if (!socket || !playerId || !question || fiftyFiftyRemaining <= 0) return;
+  // Aiuto 50/50 (solo MC): POST /api/player/[id]/fifty-fifty
+  const useFiftyFifty = async () => {
+    if (!playerId || !question || fiftyFiftyRemaining <= 0) return;
     if (question.questionType !== "MULTIPLE_CHOICE") return;
-    socket.emit("player:fifty-fifty", { playerId, gameId, gameQuestionId: question.gameQuestionId }, (res) => {
-      if ("error" in res) return;
+    try {
+      const r = await fetch(`/api/player/${playerId}/fifty-fifty`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gameId, gameQuestionId: question.gameQuestionId }),
+      });
+      const res = await r.json();
+      if (!r.ok || !res.hideIds) return;
       setHiddenAnswerIds(res.hideIds);
       setFiftyFiftyUsed((n) => n + 1);
       setLifelineAnim("fifty");
       playSound("lifeline");
       setTimeout(() => setLifelineAnim(null), 1200);
-    });
+    } catch { /* silent */ }
   };
 
-  // Scommessa "doppio o niente": rischia N punti del proprio punteggio sulla prossima domanda
-  const setWager = (amount: number) => {
-    if (!socket || !playerId) return;
-    socket.emit("player:wager", { playerId, gameId, amount }, (res) => {
-      if ("error" in res) return;
+  // Scommessa "doppio o niente": POST /api/player/[id]/wager
+  const setWager = async (amount: number) => {
+    if (!playerId) return;
+    try {
+      const r = await fetch(`/api/player/${playerId}/wager`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gameId, amount }),
+      });
+      const res = await r.json();
+      if (!r.ok || typeof res.wager !== "number") return;
       setPendingWager(res.wager);
-    });
+    } catch { /* silent */ }
   };
 
-  // Aiuto Salto: registra una risposta nulla che non elimina (disponibile per tutte le modalità)
+  // Aiuto Salto: POST /api/player/[id]/answer con skipped:true
   const useSkip = () => {
-    if (!socket || !playerId || !question || skipRemaining <= 0 || selectedAnswerId) return;
+    if (!playerId || !question || skipRemaining <= 0 || selectedAnswerId) return;
     setSkipUsed((n) => n + 1);
     setLifelineAnim("skip");
     playSound("lifeline");
     setTimeout(() => setLifelineAnim(null), 1200);
-    socket.emit("player:answer", {
-      playerId,
-      gameId,
-      timeTaken: Date.now() - questionStartTime,
-      skipped: true,
-    });
-    // Passa a ANSWERED dopo la breve animazione
+    fetch(`/api/player/${playerId}/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        gameId,
+        timeTaken: Date.now() - questionStartTime,
+        skipped: true,
+      }),
+    }).catch(() => {});
     setTimeout(() => setPhase("ANSWERED"), 800);
   };
 
@@ -1170,9 +1232,6 @@ export default function PlayPage() {
         <p className="text-muted">
           {jeopardyWaiting ? "L'host sta scegliendo la prossima cella..." : "In attesa dell'host..."}
         </p>
-        {!isConnected && (
-          <p className="text-warning text-sm mt-4">Riconnessione...</p>
-        )}
       </div>
     </main>
   );
