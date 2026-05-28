@@ -72,11 +72,50 @@ async function clearQuestionTimer(gameId: string) {
   if (t) { clearInterval(t); activeTimers.delete(gameId); }
   await prisma.game.update({ where: { id: gameId }, data: { currentQuestionDeadline: null } });
 }
+
+// ─── Fase 4.e: judging state ───────────────────────────────────────────
+// pendingJudgment + currentJudgingByGame ora unificati nel flag GameQuestion.awaitingJudgment.
+// Un solo bit per GameQuestion, niente Map in memoria; payload ricostruito on-demand.
+
+async function findAwaitingJudgment(
+  gameId: string,
+): Promise<{ id: string; questionId: string } | null> {
+  return prisma.gameQuestion.findFirst({
+    where: { gameId, awaitingJudgment: true },
+    select: { id: true, questionId: true },
+  });
+}
+
+async function clearJudging(gameId: string) {
+  await prisma.gameQuestion.updateMany({
+    where: { gameId, awaitingJudgment: true },
+    data: { awaitingJudgment: false },
+  });
+}
+
+async function buildJudgeAnswersData(
+  gameQuestionId: string,
+  questionId: string,
+): Promise<JudgeAnswersData> {
+  const playerAnswers = await prisma.playerAnswer.findMany({
+    where: { gameQuestionId },
+    include: { player: true },
+  });
+  return {
+    gameQuestionId,
+    questionId,
+    answers: playerAnswers.map((pa) => ({
+      playerId: pa.playerId,
+      nickname: pa.player.nickname,
+      answerText: pa.answerText ?? "(nessuna risposta)",
+    })),
+  };
+}
 // revealInProgress ora persistito su Game.revealInProgress (migration fase 4.b).
 // L'acquisizione del lock usa updateMany con WHERE atomico → safe per worker multipli
 // (importante post-migrazione Vercel, dove l'instance può scalare a N).
-// Partite in attesa di giudizio host (OPEN_ANSWER / IMAGE_GUESS)
-const pendingJudgment = new Map<string, { gameQuestionId: string; questionId: string }>();
+// pendingJudgment + currentJudgingByGame ora unificati in GameQuestion.awaitingJudgment
+// (migration fase 4.e — niente più Map in-memory, vedi findAwaitingJudgment/clearJudging).
 // Speedrun: timer globale della partita
 // speedrunState ora contiene solo i riferimenti ai timer JS (non serializzabili).
 // La timeline (startedAt, durationSec) vive in DB su Game.speedrunStartedAt / Game.speedrunDuration
@@ -245,7 +284,7 @@ function switchDuelTurn(r: DuelRuntime) {
 // Aggiornati dagli handler di sendNextQuestion / revealAnswer / judging.
 const currentQuestionByGame = new Map<string, QuestionData & { startedAt: number }>();
 const currentRevealByGame   = new Map<string, RevealData>();
-const currentJudgingByGame  = new Map<string, JudgeAnswersData>();
+// currentJudgingByGame: vedi commento sopra su pendingJudgment (fase 4.e).
 
 // Calcola il time limit effettivo per la domanda correntemente attiva.
 // Ordine di priorità: Speedrun (forza 10s) > (torneo) timeLimit del round > timeLimitOverride > timeLimit della domanda.
@@ -350,11 +389,14 @@ async function buildGameStateSnapshot(
   // Caduta libera: esponi le vite previste per la UI
   if (game.livesAllowed) snapshot.livesAllowed = game.livesAllowed;
 
+  // Fonte di verità per "judging in corso": DB (sopravvive a restart worker).
+  const awaitingJudgment = await findAwaitingJudgment(gameId);
+
   // Jeopardy: se siamo in attesa di scelta cella (nessuna domanda attiva e nessun reveal), includi la griglia
   if (game.jeopardyMode
       && !currentQuestionByGame.get(gameId)
       && !currentRevealByGame.get(gameId)
-      && !currentJudgingByGame.get(gameId)) {
+      && !awaitingJudgment) {
     const grid = await buildJeopardyGrid(gameId);
     if (grid) snapshot.jeopardyGrid = grid;
   }
@@ -362,15 +404,14 @@ async function buildGameStateSnapshot(
   if (game.categoryPickMode
       && !currentQuestionByGame.get(gameId)
       && !currentRevealByGame.get(gameId)
-      && !currentJudgingByGame.get(gameId)) {
+      && !awaitingJudgment) {
     const grid = await buildCategoryGrid(gameId);
     if (grid) snapshot.categoryGrid = grid;
   }
 
   // Judging in corso (OPEN_ANSWER / IMAGE_GUESS in attesa dell'host)
-  const judging = currentJudgingByGame.get(gameId);
-  if (judging) {
-    snapshot.judging = judging;
+  if (awaitingJudgment) {
+    snapshot.judging = await buildJudgeAnswersData(awaitingJudgment.id, awaitingJudgment.questionId);
     return snapshot;
   }
 
@@ -476,7 +517,7 @@ async function emitJeopardyGrid(gameId: string) {
   // Pulisce gli snapshot "active" perché siamo in attesa di scelta
   currentQuestionByGame.delete(gameId);
   currentRevealByGame.delete(gameId);
-  currentJudgingByGame.delete(gameId);
+  await clearJudging(gameId);
   io.to(`game:${gameId}`).emit("game:jeopardy-grid", grid);
 }
 
@@ -550,7 +591,7 @@ async function emitCategoryGrid(gameId: string) {
   if (!grid) return;
   currentQuestionByGame.delete(gameId);
   currentRevealByGame.delete(gameId);
-  currentJudgingByGame.delete(gameId);
+  await clearJudging(gameId);
   currentCategoryGridByGame.set(gameId, grid);
   io.to(`game:${gameId}`).emit("game:category-grid", grid);
 }
@@ -641,7 +682,7 @@ async function sendNextQuestion(gameId: string) {
 
   // Pulisci snapshot precedenti (reveal/judging) e memorizza la nuova domanda attiva
   currentRevealByGame.delete(gameId);
-  currentJudgingByGame.delete(gameId);
+  await clearJudging(gameId);
   currentQuestionByGame.set(gameId, { ...questionData, startedAt: Date.now() });
 
   io.to(`game:${gameId}`).emit("game:question", questionData);
@@ -718,22 +759,14 @@ async function sendAnswersForJudgment(
   try {
     await clearQuestionTimer(gameId);
 
-    const playerAnswers = await prisma.playerAnswer.findMany({
-      where: { gameQuestionId },
-      include: { player: true },
+    // Flag GameQuestion.awaitingJudgment = true (sostituisce pendingJudgment + currentJudgingByGame).
+    // Il payload per il client è ricostruito on-demand qui e nello snapshot.
+    await prisma.gameQuestion.update({
+      where: { id: gameQuestionId },
+      data: { awaitingJudgment: true },
     });
-
-    pendingJudgment.set(gameId, { gameQuestionId, questionId });
-
-    const answers = playerAnswers.map((pa) => ({
-      playerId: pa.playerId,
-      nickname: pa.player.nickname,
-      answerText: pa.answerText ?? "(nessuna risposta)",
-    }));
-
-    const judgingData: JudgeAnswersData = { gameQuestionId, questionId, answers };
+    const judgingData = await buildJudgeAnswersData(gameQuestionId, questionId);
     currentQuestionByGame.delete(gameId);
-    currentJudgingByGame.set(gameId, judgingData);
 
     io.to(`game:${gameId}`).emit("game:judge-answers", judgingData);
   } finally {
@@ -818,7 +851,7 @@ async function revealAnswer(
 
     // Salva snapshot per eventuali rejoin durante la fase reveal
     currentQuestionByGame.delete(gameId);
-    currentJudgingByGame.delete(gameId);
+    await clearJudging(gameId);
     currentRevealByGame.set(gameId, revealData);
 
     io.to(`game:${gameId}`).emit("game:reveal", revealData);
@@ -974,11 +1007,10 @@ async function finishGame(gameId: string) {
   // Pulisci tutti gli snapshot in memoria per questa partita
   currentQuestionByGame.delete(gameId);
   currentRevealByGame.delete(gameId);
-  currentJudgingByGame.delete(gameId);
   currentCategoryGridByGame.delete(gameId);
-  // localTurnByGame ora in DB → reset persistente (migration fase 4.a)
+  // localTurnByGame + awaitingJudgment ora in DB → reset persistente (fase 4.a/4.e)
   await prisma.game.update({ where: { id: gameId }, data: { localTurnPlayerId: null } });
-  pendingJudgment.delete(gameId);
+  await clearJudging(gameId);
   await clearSpeedrunTimers(gameId);
   await clearQuestionTimer(gameId);
 
@@ -1421,11 +1453,18 @@ io.on("connection", (socket) => {
 
   // HOST: giudica le risposte aperte (OPEN_ANSWER / IMAGE_GUESS)
   socket.on("host:judge", async ({ gameId, judgments }) => {
-    const pending = pendingJudgment.get(gameId);
+    const pending = await findAwaitingJudgment(gameId);
     if (!pending) return;
-    pendingJudgment.delete(gameId);
+    // Lock atomico: solo il primo host:judge vince. updateMany sull'id specifico
+    // con WHERE awaitingJudgment:true → safe per worker multipli o doppi click.
+    const cleared = await prisma.gameQuestion.updateMany({
+      where: { id: pending.id, awaitingJudgment: true },
+      data: { awaitingJudgment: false },
+    });
+    if (cleared.count === 0) return;
 
-    const { gameQuestionId, questionId } = pending;
+    const gameQuestionId = pending.id;
+    const questionId = pending.questionId;
 
     const game = await prisma.game.findUnique({
       where: { id: gameId },
