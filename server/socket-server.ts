@@ -295,6 +295,78 @@ async function deleteDuel(gameId: string) {
   await prisma.duel.deleteMany({ where: { gameId } });
 }
 
+// Fase 5: ricostruisce SOLO lo stato pubblico (DuelState) di un duello attivo da DB.
+// Usato in buildGameStateSnapshot quando duelByGame in-memory non ha la riga
+// (es. worker appena partito, restart post-deploy, futuro multi-instance Vercel).
+// La parte runtime (tickInterval, pool, mask completa) NON viene resuscitata qui:
+// il tick rimarrà di pertinenza del worker che ha originato il duello; in fase 8
+// passerà al polling client. Quello che serve al rejoin è solo DuelState per la UI.
+async function loadDuelStateFromDB(gameId: string): Promise<DuelState | null> {
+  const row = await prisma.duel.findUnique({ where: { gameId } });
+  if (!row || row.endedAt) return null;
+
+  const players = await prisma.player.findMany({
+    where: { id: { in: [row.playerAId, row.playerBId] } },
+  });
+  const pA = players.find((p) => p.id === row.playerAId);
+  const pB = players.find((p) => p.id === row.playerBId);
+  if (!pA || !pB) return null;
+
+  // Decrementa solo il timer del player attivo, e solo se non in pausa.
+  // I valori in DB sono freschi a meno di un tick (~250ms, vedi persistDuel).
+  let timeLeftA = row.playerATimeMs;
+  let timeLeftB = row.playerBTimeMs;
+  if (!row.paused && row.lastTickAt) {
+    const elapsed = Date.now() - row.lastTickAt.getTime();
+    if (row.currentTurnPlayerId === row.playerAId) {
+      timeLeftA = Math.max(0, timeLeftA - elapsed);
+    } else {
+      timeLeftB = Math.max(0, timeLeftB - elapsed);
+    }
+  }
+
+  let mask: { chars: string[]; revealed: number[]; blockedIdx: number } | null = null;
+  try {
+    const parsed = JSON.parse(row.maskJson);
+    if (parsed && Array.isArray(parsed.chars)) mask = parsed;
+  } catch {
+    // mask vuota / corrotta → mostriamo il testo masked così come renderizzato all'ultimo save.
+  }
+
+  const masked = mask
+    ? mask.chars
+        .map((c: string, i: number) =>
+          /[A-ZÀÈÉÌÒÙ]/.test(c) ? (mask!.revealed.includes(i) ? c : "_") : c,
+        )
+        .join(" ")
+    : "";
+
+  return {
+    playerA: {
+      id: pA.id,
+      nickname: pA.nickname,
+      emoji: pA.emoji,
+      avatarUrl: pA.avatarUrl,
+      timeLeftMs: timeLeftA,
+    },
+    playerB: {
+      id: pB.id,
+      nickname: pB.nickname,
+      emoji: pB.emoji,
+      avatarUrl: pB.avatarUrl,
+      timeLeftMs: timeLeftB,
+    },
+    activePlayerId: row.currentTurnPlayerId,
+    question: row.currentQuestionText
+      ? { text: row.currentQuestionText, masked, length: mask?.chars.length ?? 0 }
+      : null,
+    turnSeq: 0,
+    durationSec: row.durationSec,
+    finished: false,
+    paused: row.paused,
+  };
+}
+
 const REVEAL_INTERVAL_MS = 3000;
 const VOWELS = /[AEIOUÀÈÉÌÒÙ]/;
 
@@ -489,11 +561,16 @@ async function buildGameStateSnapshot(
     categoryPickMode: game.categoryPickMode,
   };
 
-  // 100 Secondi: se c'è un duello attivo, includi lo stato
+  // 100 Secondi: se c'è un duello attivo, includi lo stato.
+  // Prima prova la cache in-memory (worker che ha originato il duello: ha il tick fresco).
+  // Fallback su DB se la Map è vuota → consente rejoin cross-worker (fase 5).
   const duel = duelByGame.get(gameId);
   if (duel && !duel.state.finished) {
     applyElapsed(duel);
     snapshot.duel = duel.state;
+  } else {
+    const dbState = await loadDuelStateFromDB(gameId);
+    if (dbState) snapshot.duel = dbState;
   }
 
   if (game.status === "FINISHED") {
