@@ -78,14 +78,17 @@ async function clearQuestionTimer(gameId: string) {
 // Partite in attesa di giudizio host (OPEN_ANSWER / IMAGE_GUESS)
 const pendingJudgment = new Map<string, { gameQuestionId: string; questionId: string }>();
 // Speedrun: timer globale della partita
-const speedrunState = new Map<string, { endTimeout: NodeJS.Timeout; tickInterval: NodeJS.Timeout; startedAt: number; durationSec: number }>();
+// speedrunState ora contiene solo i riferimenti ai timer JS (non serializzabili).
+// La timeline (startedAt, durationSec) vive in DB su Game.speedrunStartedAt / Game.speedrunDuration
+// (migration fase 4.d), così rejoin e polling client funzionano anche dopo restart del worker.
+const speedrunState = new Map<string, { endTimeout: NodeJS.Timeout; tickInterval: NodeJS.Timeout }>();
 // Modalità presentatore: il giocatore di turno è ora persistito in Game.localTurnPlayerId
 // (migration vercel-pusher, fase 4.a — niente più Map in-memory).
 // "Scegli categoria": griglia corrente memorizzata per rejoin
 const currentCategoryGridByGame = new Map<string, CategoryGridData>();
 
-function startSpeedrunTimers(gameId: string, durationSec: number) {
-  clearSpeedrunTimers(gameId);
+async function startSpeedrunTimers(gameId: string, durationSec: number) {
+  await clearSpeedrunTimers(gameId);
   const startedAt = Date.now();
   const endTimeout = setTimeout(() => {
     finishGame(gameId).catch((e) => console.error("speedrun finishGame error", e));
@@ -96,16 +99,23 @@ function startSpeedrunTimers(gameId: string, durationSec: number) {
     io.to(`game:${gameId}`).emit("game:speedrun-timer", { remaining });
     if (remaining <= 0) clearInterval(tickInterval);
   }, 1000);
-  speedrunState.set(gameId, { endTimeout, tickInterval, startedAt, durationSec });
+  speedrunState.set(gameId, { endTimeout, tickInterval });
+  // Persisti l'inizio così buildGameStateSnapshot e (post-Pusher) il polling client
+  // possono calcolare i secondi rimasti anche se il worker è stato sostituito.
+  await prisma.game.update({
+    where: { id: gameId },
+    data: { speedrunStartedAt: new Date(startedAt) },
+  });
 }
 
-function clearSpeedrunTimers(gameId: string) {
+async function clearSpeedrunTimers(gameId: string) {
   const s = speedrunState.get(gameId);
   if (s) {
     clearTimeout(s.endTimeout);
     clearInterval(s.tickInterval);
     speedrunState.delete(gameId);
   }
+  await prisma.game.update({ where: { id: gameId }, data: { speedrunStartedAt: null } });
 }
 
 // 100 Secondi: stato duello in-memory per gameId
@@ -332,11 +342,10 @@ async function buildGameStateSnapshot(
 
   if (game.status !== "PLAYING") return snapshot;
 
-  // Speedrun: quanto tempo globale resta
-  const sr = speedrunState.get(gameId);
-  if (sr) {
-    const elapsed = (Date.now() - sr.startedAt) / 1000;
-    snapshot.speedrunRemaining = Math.max(0, Math.ceil(sr.durationSec - elapsed));
+  // Speedrun: quanto tempo globale resta. Fonte di verità in DB (sopravvive a restart worker).
+  if (game.speedrunStartedAt && game.speedrunDuration) {
+    const elapsed = (Date.now() - game.speedrunStartedAt.getTime()) / 1000;
+    snapshot.speedrunRemaining = Math.max(0, Math.ceil(game.speedrunDuration - elapsed));
   }
   // Caduta libera: esponi le vite previste per la UI
   if (game.livesAllowed) snapshot.livesAllowed = game.livesAllowed;
@@ -970,7 +979,7 @@ async function finishGame(gameId: string) {
   // localTurnByGame ora in DB → reset persistente (migration fase 4.a)
   await prisma.game.update({ where: { id: gameId }, data: { localTurnPlayerId: null } });
   pendingJudgment.delete(gameId);
-  clearSpeedrunTimers(gameId);
+  await clearSpeedrunTimers(gameId);
   await clearQuestionTimer(gameId);
 
   io.to(`game:${gameId}`).emit("game:finished", {
@@ -1312,7 +1321,7 @@ io.on("connection", (socket) => {
 
     // Speedrun: avvia il timer globale
     if (game.speedrunDuration && game.speedrunDuration > 0) {
-      startSpeedrunTimers(gameId, game.speedrunDuration);
+      await startSpeedrunTimers(gameId, game.speedrunDuration);
     }
 
     // Jeopardy / Scegli categoria: mostra la griglia all'host invece di inviare subito la domanda
