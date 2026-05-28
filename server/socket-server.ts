@@ -197,8 +197,9 @@ async function buildRevealData(gameQuestionId: string): Promise<RevealData | nul
 const speedrunState = new Map<string, { endTimeout: NodeJS.Timeout; tickInterval: NodeJS.Timeout }>();
 // Modalità presentatore: il giocatore di turno è ora persistito in Game.localTurnPlayerId
 // (migration vercel-pusher, fase 4.a — niente più Map in-memory).
-// "Scegli categoria": griglia corrente memorizzata per rejoin
-const currentCategoryGridByGame = new Map<string, CategoryGridData>();
+// "Scegli categoria": stato "in attesa di scelta categoria" persistito su Game.awaitingCategoryPick
+// (migration vercel-pusher, fase 4.g). La griglia stessa non va memorizzata: buildCategoryGrid la
+// ricalcola al volo dalle domande rimanenti.
 
 async function startSpeedrunTimers(gameId: string, durationSec: number) {
   await clearSpeedrunTimers(gameId);
@@ -669,7 +670,7 @@ async function emitCategoryGrid(gameId: string) {
   currentQuestionByGame.delete(gameId);
   await clearReveal(gameId);
   await clearJudging(gameId);
-  currentCategoryGridByGame.set(gameId, grid);
+  await prisma.game.update({ where: { id: gameId }, data: { awaitingCategoryPick: true } });
   io.to(`game:${gameId}`).emit("game:category-grid", grid);
 }
 
@@ -757,9 +758,10 @@ async function sendNextQuestion(gameId: string) {
     wordTemplate: q.wordTemplate ?? null,
   };
 
-  // Pulisci snapshot precedenti (reveal/judging) e memorizza la nuova domanda attiva
+  // Pulisci snapshot precedenti (reveal/judging) + esci dalla fase di category-pick se attiva
   await clearReveal(gameId);
   await clearJudging(gameId);
+  await prisma.game.update({ where: { id: gameId }, data: { awaitingCategoryPick: false } });
   currentQuestionByGame.set(gameId, { ...questionData, startedAt: Date.now() });
 
   io.to(`game:${gameId}`).emit("game:question", questionData);
@@ -1037,9 +1039,11 @@ async function finishGame(gameId: string) {
 
   // Pulisci tutti gli snapshot in memoria per questa partita
   currentQuestionByGame.delete(gameId);
-  currentCategoryGridByGame.delete(gameId);
-  // Reset campi di stato runtime persistiti in DB (fase 4.a/4.e/4.f)
-  await prisma.game.update({ where: { id: gameId }, data: { localTurnPlayerId: null } });
+  // Reset campi di stato runtime persistiti in DB (fase 4.a/4.e/4.f/4.g)
+  await prisma.game.update({
+    where: { id: gameId },
+    data: { localTurnPlayerId: null, awaitingCategoryPick: false },
+  });
   await clearReveal(gameId);
   await clearJudging(gameId);
   await clearSpeedrunTimers(gameId);
@@ -1428,8 +1432,10 @@ io.on("connection", (socket) => {
       return;
     }
     const chosen = candidates[Math.floor(Math.random() * candidates.length)];
-    await prisma.game.update({ where: { id: gameId }, data: { currentIndex: chosen.order } });
-    currentCategoryGridByGame.delete(gameId);
+    await prisma.game.update({
+      where: { id: gameId },
+      data: { currentIndex: chosen.order, awaitingCategoryPick: false },
+    });
     await sendNextQuestion(gameId);
   });
 
