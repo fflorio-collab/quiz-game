@@ -413,6 +413,16 @@ export default function AdminPage() {
   };
   const exitBuildMode = () => setBuildPackId(null);
 
+  // Visualizza le domande di un pack senza entrare in build mode: passa alla tab
+  // "Domande" e imposta il filtro pack. L'utente vede solo le domande dentro al pack.
+  const viewPackQuestions = (id: string) => {
+    setBuildPackId(null);
+    setFilterPack(id);
+    setTab("questions");
+    setShowQForm(false);
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   // ── Aggiungi/rimuovi una domanda esistente dal pack di build ──
   // Quando sei in build mode di un pack, ogni card domanda ha un toggle che aggiunge/rimuove
   // la domanda dal pack. La domanda resta sempre nel DB generale: il pack è solo un'aggregazione.
@@ -1113,9 +1123,10 @@ export default function AdminPage() {
                         {p.description && <p className="text-sm text-muted mt-1 line-clamp-2">{p.description}</p>}
                       </div>
                     </div>
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between flex-wrap gap-y-2">
                       <span className="text-xs text-muted">{p._count?.questions ?? 0} domande</span>
-                      <div className="flex gap-3 text-sm">
+                      <div className="flex gap-3 text-sm flex-wrap">
+                        <button onClick={() => viewPackQuestions(p.id)} className="text-muted hover:text-white">👁 Vedi domande</button>
                         {!active ? (
                           <button onClick={() => enterBuildMode(p.id)} className="text-accent hover:underline">🛠 Build mode</button>
                         ) : (
