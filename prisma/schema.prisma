@@ -1,12 +1,13 @@
 // Prisma schema per il quiz game
-// Usa SQLite per sviluppo, cambia provider in "postgresql" per produzione
+// Postgres (Neon in prod, Neon branch o Docker locale in dev). Per ripristinare
+// SQLite sostituisci provider con "sqlite" e DATABASE_URL con "file:./dev.db".
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
