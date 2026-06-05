@@ -182,7 +182,10 @@ export default function AdminPage() {
 
   useEffect(() => {
     setAdminUrl(window.location.origin + "/admin");
-    fetch("/api/admin/questions").then((r) => {
+    // Auto-detect login: chiede /api/admin/auth (GET) che restituisce 200 SOLO
+    // se il cookie admin-token è valido. Prima usava /api/admin/questions GET
+    // che non controlla auth → mostrava il pannello anche a utenti non loggati.
+    fetch("/api/admin/auth").then((r) => {
       if (r.ok) { setAuthed(true); loadData(); }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
