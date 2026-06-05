@@ -142,6 +142,9 @@ const QuestionSchema = z.discriminatedUnion("type", [
 ]);
 
 export async function GET(req: Request) {
+  if (!isAdmin()) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
   const { searchParams } = new URL(req.url);
   const categoryId = searchParams.get("categoryId");
   const difficulty = searchParams.get("difficulty");
