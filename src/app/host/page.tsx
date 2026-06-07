@@ -3,7 +3,6 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useSocket } from "@/lib/useSocket";
 import type { QuestionType, DifficultyFilter, PlayMode } from "@/types/socket";
 import { QUESTION_TYPE_LIST, QUESTION_TYPE_META } from "@/lib/questionTypes";
 import {
@@ -55,7 +54,6 @@ function makeRound(type: QuestionType): RoundConfig {
 
 export default function HostPage() {
   const router = useRouter();
-  const { socket, isConnected } = useSocket();
 
   // Top-level
   const [hostName, setHostName] = useState("");
@@ -206,17 +204,14 @@ export default function HostPage() {
   // Disponibilità globale calcolata: numero domande per tipo (per disabilitare bottoni "modalità senza domande")
   const isTypeEmpty = (t: QuestionType) => (countsByType[t] ?? 0) === 0;
 
-  // Submit
-  const createGame = () => {
-    if (!socket) return;
+  // Submit — migration vercel-pusher fase 7.6: POST /api/game invece di socket.emit("host:create").
+  const createGame = async () => {
     if (!hostName.trim()) { setError("Inserisci il tuo nome"); return; }
     if (isTournament && rounds.length < TOURNAMENT_MIN_ROUNDS) {
       setError(`Seleziona almeno ${TOURNAMENT_MIN_ROUNDS} round per il torneo`); return;
     }
     setLoading(true); setError("");
 
-    // Costruisco anche i campi "legacy" (parallel arrays) per compatibilità col server attuale,
-    // finché il dispatcher non leggerà direttamente roundsConfig.
     const legacyTournamentModes = isTournament ? rounds.map((r) => r.type) : undefined;
     const legacyTimeLimits = isTournament ? rounds.map((r) => r.timeLimit ?? QUESTION_TYPE_META[r.type].defaultTimeLimit) : undefined;
     const legacyPointsOverrides = rounds.map((r) => r.pointsExact ?? 0);
@@ -225,47 +220,47 @@ export default function HostPage() {
       ? rounds.map((r) => r.manualQuestionIds ?? [])
       : undefined;
 
-    // Opzioni globali "vecchie" prese dal primo round (compat) — il nuovo dispatcher le ignora
     const r0 = rounds[0];
-
-    socket.emit(
-      "host:create",
-      {
-        hostName: hostName.trim(),
-        difficulty,
-        totalQuestions,
-        questionType: r0.type,
-        // Nuovo contratto (server moderno):
-        roundsConfig: rounds,
-        playMode,
-        passOnWrong,
-        turnOrder: turnOrder.length > 0 ? turnOrder : undefined,
-        // Legacy (server attuale):
-        tournamentModes: legacyTournamentModes,
-        tournamentTimeLimits: legacyTimeLimits,
-        categoryIds: selectedCategoryIds.length > 0 ? selectedCategoryIds : undefined,
-        timeLimitOverride: !isTournament ? (r0.timeLimit ?? null) : null,
-        lastManStanding: r0.lastManStanding,
-        speedrunDuration: r0.speedrun,
-        livesAllowed: r0.lives,
-        jeopardyMode: r0.jeopardy,
-        fiftyFiftyCount: localPartyMode ? 0 : (r0.fiftyFifty ?? 0),
-        skipCount: localPartyMode ? 0 : (r0.skip ?? 0),
-        localPartyMode,
-        pointsOverrides: legacyPointsOverrides,
-        tournamentCategoryIds: legacyTournamentCategoryIds,
-        categoryPickMode: r0.categoryPick,
-        manualQuestionIds: legacyManualQuestionIds,
-      },
-      (res) => {
-        setLoading(false);
-        if ("error" in res) { setError(res.error); return; }
-        localStorage.setItem("hostGameId", res.gameId);
-        localStorage.setItem("hostCode", res.code);
-        localStorage.setItem("hostName", hostName.trim());
-        router.push(`/host/${res.gameId}`);
-      }
-    );
+    try {
+      const r = await fetch("/api/game", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          hostName: hostName.trim(),
+          difficulty,
+          totalQuestions,
+          questionType: r0.type,
+          roundsConfig: rounds,
+          playMode,
+          passOnWrong,
+          turnOrder: turnOrder.length > 0 ? turnOrder : undefined,
+          tournamentModes: legacyTournamentModes,
+          tournamentTimeLimits: legacyTimeLimits,
+          categoryIds: selectedCategoryIds.length > 0 ? selectedCategoryIds : undefined,
+          timeLimitOverride: !isTournament ? (r0.timeLimit ?? null) : null,
+          lastManStanding: r0.lastManStanding,
+          speedrunDuration: r0.speedrun,
+          livesAllowed: r0.lives,
+          jeopardyMode: r0.jeopardy,
+          fiftyFiftyCount: localPartyMode ? 0 : (r0.fiftyFifty ?? 0),
+          skipCount: localPartyMode ? 0 : (r0.skip ?? 0),
+          localPartyMode,
+          pointsOverrides: legacyPointsOverrides,
+          tournamentCategoryIds: legacyTournamentCategoryIds,
+          categoryPickMode: r0.categoryPick,
+          manualQuestionIds: legacyManualQuestionIds,
+        }),
+      });
+      const res = await r.json();
+      if (!r.ok) { setError(res.error || "Errore nella creazione"); setLoading(false); return; }
+      localStorage.setItem("hostGameId", res.gameId);
+      localStorage.setItem("hostCode", res.code);
+      localStorage.setItem("hostName", hostName.trim());
+      router.push(`/host/${res.gameId}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Errore di rete");
+      setLoading(false);
+    }
   };
 
   return (
@@ -538,8 +533,8 @@ export default function HostPage() {
 
             {error && <div className="bg-danger/10 border border-danger/30 text-danger rounded-lg p-3 text-sm">{error}</div>}
 
-            <button onClick={createGame} disabled={loading || !isConnected} className="btn-primary w-full">
-              {loading ? "Creazione..." : !isConnected ? "Connessione al server..."
+            <button onClick={createGame} disabled={loading} className="btn-primary w-full">
+              {loading ? "Creazione..."
                 : isTournament ? `Crea torneo (${rounds.length} round)` : "Crea partita"}
             </button>
           </div>

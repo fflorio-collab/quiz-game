@@ -79,6 +79,9 @@ export default function AdminPage() {
   const [filterCategory, setFilterCategory] = useState("");
   const [filterDifficulty, setFilterDifficulty] = useState("");
   const [filterType, setFilterType] = useState("");
+  // Ricerca full-text client-side su testo domanda + risposte. Case-insensitive,
+  // vuoto = no filter. Combinabile con tutti gli altri filtri.
+  const [qSearch, setQSearch] = useState("");
   // Filtro pack: "" = tutti · "any" = in qualsiasi pack · "none" = in nessun pack · "<id>" = pack specifico
   const [filterPack, setFilterPack] = useState("");
 
@@ -86,6 +89,10 @@ export default function AdminPage() {
   // null = build mode disattivo (modalità DB generale).
   const [buildPackId, setBuildPackId] = useState<string | null>(null);
   const buildingPack = packs.find((p) => p.id === buildPackId) ?? null;
+  // View mode: visualizzazione read-only delle domande di un pack. Mutualmente
+  // esclusivo con buildPackId — entrare in uno azzera l'altro.
+  const [viewingPackId, setViewingPackId] = useState<string | null>(null);
+  const viewingPack = packs.find((p) => p.id === viewingPackId) ?? null;
 
   // Pack form state
   const [showPackForm, setShowPackForm] = useState(false);
@@ -128,6 +135,13 @@ export default function AdminPage() {
   const [qMediaMode, setQMediaMode] = useState<"upload" | "youtube" | "url">("upload");
   const [qUrlInput, setQUrlInput] = useState("");
   const [qFormError, setQFormError] = useState("");
+  // Campo che ha fallito validazione (per highlight rosso). null = nessun errore di campo.
+  const [qFormErrorField, setQFormErrorField] = useState<
+    "text" | "category" | "answers" | "openAnswer" | "wordTemplate" | "media" | null
+  >(null);
+  const [qSaving, setQSaving] = useState(false);
+  // ID della risorsa in cancellazione (per disabilitare il singolo bottone delete).
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const qFileRef = useRef<HTMLInputElement>(null);
 
   // Category form state
@@ -182,7 +196,10 @@ export default function AdminPage() {
 
   useEffect(() => {
     setAdminUrl(window.location.origin + "/admin");
-    fetch("/api/admin/questions").then((r) => {
+    // Auto-detect login: chiede /api/admin/auth (GET) che restituisce 200 SOLO
+    // se il cookie admin-token è valido. Prima usava /api/admin/questions GET
+    // che non controlla auth → mostrava il pannello anche a utenti non loggati.
+    fetch("/api/admin/auth").then((r) => {
       if (r.ok) { setAuthed(true); loadData(); }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -258,27 +275,33 @@ export default function AdminPage() {
 
   const saveQuestion = async () => {
     setQFormError("");
-    if (!qText.trim() || !qCategory) { setQFormError("Compila testo e categoria"); return; }
+    setQFormErrorField(null);
+    // Helper: setta errore + campo + esce. Restituisce sempre true per usarlo come early-return.
+    const failAt = (field: typeof qFormErrorField, msg: string) => {
+      setQFormErrorField(field); setQFormError(msg); return true;
+    };
+    if (!qText.trim()) { failAt("text", "Compila il testo della domanda"); return; }
+    if (!qCategory) { failAt("category", "Seleziona una categoria"); return; }
     if (qType === "MULTIPLE_CHOICE") {
-      if (qAnswers.filter((a) => a.isCorrect).length !== 1) { setQFormError("Seleziona esattamente una risposta corretta"); return; }
-      if (qAnswers.some((a) => !a.text.trim())) { setQFormError("Tutte le risposte devono essere compilate"); return; }
+      if (qAnswers.filter((a) => a.isCorrect).length !== 1) { failAt("answers", "Seleziona esattamente una risposta corretta"); return; }
+      if (qAnswers.some((a) => !a.text.trim())) { failAt("answers", "Tutte le risposte devono essere compilate"); return; }
     }
     if (qType === "WORD_COMPLETION") {
-      if (!qOpenAnswer.trim()) { setQFormError("Inserisci la parola corretta"); return; }
-      if (!qWordTemplate.trim()) { setQFormError("Inserisci il template (usa _ per le lettere mancanti)"); return; }
+      if (!qOpenAnswer.trim()) { failAt("openAnswer", "Inserisci la parola corretta"); return; }
+      if (!qWordTemplate.trim()) { failAt("wordTemplate", "Inserisci il template (usa _ per le lettere mancanti)"); return; }
     }
-    if (qType === "IMAGE_GUESS" && !qMediaUrl) { setQFormError("Carica un'immagine prima di salvare"); return; }
+    if (qType === "IMAGE_GUESS" && !qMediaUrl) { failAt("media", "Carica un'immagine prima di salvare"); return; }
     if (qType === "REACTION_CHAIN") {
-      if (!qOpenAnswer.trim()) { setQFormError("Inserisci la parola da indovinare"); return; }
-      if (qClues.some((c) => !c.trim())) { setQFormError("Compila tutti e 3 gli indizi"); return; }
+      if (!qOpenAnswer.trim()) { failAt("openAnswer", "Inserisci la parola da indovinare"); return; }
+      if (qClues.some((c) => !c.trim())) { failAt("answers", "Compila tutti e 3 gli indizi"); return; }
     }
     if (qType === "CLUE_REVEAL") {
-      if (!qOpenAnswer.trim()) { setQFormError("Inserisci la risposta attesa"); return; }
-      if (!qMediaUrl) { setQFormError("Carica un'immagine da rivelare"); return; }
+      if (!qOpenAnswer.trim()) { failAt("openAnswer", "Inserisci la risposta attesa"); return; }
+      if (!qMediaUrl) { failAt("media", "Carica un'immagine da rivelare"); return; }
     }
     if (qType === "ONLY_CONNECT") {
-      if (!qOpenAnswer.trim()) { setQFormError("Inserisci il link/collegamento"); return; }
-      if (qItems.some((x) => !x.trim())) { setQFormError("Compila tutti e 4 gli elementi"); return; }
+      if (!qOpenAnswer.trim()) { failAt("openAnswer", "Inserisci il link/collegamento"); return; }
+      if (qItems.some((x) => !x.trim())) { failAt("answers", "Compila tutti e 4 gli elementi"); return; }
     }
 
     const body: Record<string, unknown> = {
@@ -304,17 +327,27 @@ export default function AdminPage() {
     const buildQs = !qEditId && buildPackId ? `?packId=${encodeURIComponent(buildPackId)}` : "";
     const url = qEditId ? `/api/admin/questions/${qEditId}` : `/api/admin/questions${buildQs}`;
     const method = qEditId ? "PUT" : "POST";
-    const res = await fetch(url, {
-      method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    });
-    if (!res.ok) { const err = await res.json(); setQFormError(err.error || "Errore"); return; }
-    resetQForm(); setShowQForm(false); loadData();
+    setQSaving(true);
+    try {
+      const res = await fetch(url, {
+        method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      if (!res.ok) { const err = await res.json(); setQFormError(err.error || "Errore"); return; }
+      resetQForm(); setShowQForm(false); loadData();
+    } finally {
+      setQSaving(false);
+    }
   };
 
   const deleteQuestion = async (id: string) => {
     if (!confirm("Eliminare questa domanda?")) return;
-    await fetch(`/api/admin/questions/${id}`, { method: "DELETE" });
-    loadData();
+    setDeletingId(id);
+    try {
+      await fetch(`/api/admin/questions/${id}`, { method: "DELETE" });
+      await loadData();
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   // Category CRUD
@@ -345,9 +378,14 @@ export default function AdminPage() {
 
   const deleteCategory = async (id: string) => {
     if (!confirm("Eliminare la categoria? Verranno eliminate anche tutte le domande associate.")) return;
-    const res = await fetch(`/api/admin/categories/${id}`, { method: "DELETE" });
-    if (!res.ok) { const err = await res.json(); alert(err.error || "Errore"); return; }
-    loadData();
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/admin/categories/${id}`, { method: "DELETE" });
+      if (!res.ok) { const err = await res.json(); alert(err.error || "Errore"); return; }
+      await loadData();
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   // ── Pack CRUD ──
@@ -390,11 +428,17 @@ export default function AdminPage() {
 
   const deletePack = async (id: string) => {
     if (!confirm("Eliminare il pack? Le domande non verranno cancellate, solo l'associazione al pack.")) return;
-    const res = await fetch(`/api/admin/packs/${id}`, { method: "DELETE" });
-    if (!res.ok) { const err = await res.json(); alert(err.error || "Errore"); return; }
-    // Se sto buildando questo pack, esci dalla build mode
-    if (buildPackId === id) setBuildPackId(null);
-    loadData();
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/admin/packs/${id}`, { method: "DELETE" });
+      if (!res.ok) { const err = await res.json(); alert(err.error || "Errore"); return; }
+      // Se sto buildando o visualizzando questo pack, esci dalle modalità.
+      if (buildPackId === id) setBuildPackId(null);
+      if (viewingPackId === id) { setViewingPackId(null); setFilterPack(""); }
+      await loadData();
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   // Entra/esci dalla "build mode" per un pack.
@@ -404,11 +448,27 @@ export default function AdminPage() {
   // selezionando domande esistenti o creandone di nuove cliccando "+ Nuova domanda".
   const enterBuildMode = (id: string) => {
     setBuildPackId(id);
+    setViewingPackId(null);
     setTab("questions");
     setShowQForm(false);
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const exitBuildMode = () => setBuildPackId(null);
+
+  // Visualizza le domande di un pack senza entrare in build mode: passa alla tab
+  // "Domande" e imposta il filtro pack. L'utente vede solo le domande dentro al pack.
+  const viewPackQuestions = (id: string) => {
+    setBuildPackId(null);
+    setViewingPackId(id);
+    setFilterPack(id);
+    setTab("questions");
+    setShowQForm(false);
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const exitViewMode = () => {
+    setViewingPackId(null);
+    setFilterPack("");
+  };
 
   // ── Aggiungi/rimuovi una domanda esistente dal pack di build ──
   // Quando sei in build mode di un pack, ogni card domanda ha un toggle che aggiunge/rimuove
@@ -430,12 +490,19 @@ export default function AdminPage() {
     loadData();
   };
 
-  const filtered = questions.filter(
-    (q) =>
-      (!filterCategory || q.category.id === filterCategory) &&
-      (!filterDifficulty || q.difficulty === filterDifficulty) &&
-      (!filterType || q.type === filterType)
-  );
+  const filtered = questions.filter((q) => {
+    if (filterCategory && q.category.id !== filterCategory) return false;
+    if (filterDifficulty && q.difficulty !== filterDifficulty) return false;
+    if (filterType && q.type !== filterType) return false;
+    const s = qSearch.trim().toLowerCase();
+    if (s) {
+      const matchText = q.text.toLowerCase().includes(s);
+      const matchAnswer = q.answers.some((a) => a.text.toLowerCase().includes(s));
+      const matchOpen = (q.openAnswer ?? "").toLowerCase().includes(s);
+      if (!matchText && !matchAnswer && !matchOpen) return false;
+    }
+    return true;
+  });
 
   if (!authed) {
     return (
@@ -515,6 +582,25 @@ export default function AdminPage() {
           </div>
         )}
 
+        {/* Banner view mode: sola lettura, mostra solo le domande del pack selezionato */}
+        {viewingPack && !buildingPack && (
+          <div className="card mb-4 flex items-center gap-3 border-2 animate-slide-up"
+               style={{ borderColor: viewingPack.color ?? "#a855f7", backgroundColor: `${viewingPack.color ?? "#a855f7"}10` }}>
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl flex-shrink-0"
+                 style={{ backgroundColor: `${viewingPack.color ?? "#a855f7"}30` }}>
+              {viewingPack.icon ?? "📦"}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-muted">👁 Stai visualizzando un pack</p>
+              <p className="font-bold truncate">Domande nel pack: {viewingPack.name}</p>
+              <p className="text-xs text-muted">
+                Sola lettura. Per modificare il contenuto del pack passa a <span className="text-accent font-medium">Build mode</span>.
+              </p>
+            </div>
+            <button onClick={exitViewMode} className="btn-secondary text-sm flex-shrink-0">Esci dalla vista</button>
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="flex gap-1 mb-6 border-b border-border">
           {(["questions", "categories", "packs", "import"] as Tab[]).map((t) => (
@@ -557,14 +643,17 @@ export default function AdminPage() {
                   {/* Testo */}
                   <div>
                     <label className="block text-sm font-medium mb-1">Testo domanda</label>
-                    <input value={qText} onChange={(e) => setQText(e.target.value)} className="input" placeholder="Es. Qual è la capitale d'Italia?" />
+                    <input value={qText} onChange={(e) => setQText(e.target.value)}
+                      className={`input ${qFormErrorField === "text" ? "!border-danger !border-2" : ""}`}
+                      placeholder="Es. Qual è la capitale d'Italia?" />
                   </div>
 
                   {/* Categoria + Difficoltà */}
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium mb-1">Categoria</label>
-                      <select value={qCategory} onChange={(e) => setQCategory(e.target.value)} className="input">
+                      <select value={qCategory} onChange={(e) => setQCategory(e.target.value)}
+                        className={`input ${qFormErrorField === "category" ? "!border-danger !border-2" : ""}`}>
                         {categories.map((c) => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
                       </select>
                     </div>
@@ -676,7 +765,7 @@ export default function AdminPage() {
 
                   {/* Risposte scelta multipla */}
                   {qType === "MULTIPLE_CHOICE" && (
-                    <div>
+                    <div className={qFormErrorField === "answers" ? "ring-2 ring-danger rounded-xl p-2 -m-2" : ""}>
                       <label className="block text-sm font-medium mb-2">Risposte (seleziona quella corretta)</label>
                       <div className="space-y-2">
                         {qAnswers.map((a, i) => (
@@ -722,9 +811,10 @@ export default function AdminPage() {
                       <div>
                         <label className="block text-sm font-medium mb-1">Il link/collegamento (riferimento admin)</label>
                         <input value={qOpenAnswer} onChange={(e) => setQOpenAnswer(e.target.value)}
-                          className="input" placeholder="Es. Opere di Shakespeare" />
+                          className={`input ${qFormErrorField === "openAnswer" ? "!border-danger !border-2" : ""}`}
+                          placeholder="Es. Opere di Shakespeare" />
                       </div>
-                      <div>
+                      <div className={qFormErrorField === "answers" ? "ring-2 ring-danger rounded-xl p-2 -m-2" : ""}>
                         <label className="block text-sm font-medium mb-1">4 elementi con qualcosa in comune</label>
                         {qItems.map((x, i) => (
                           <input
@@ -745,7 +835,8 @@ export default function AdminPage() {
                     <div>
                       <label className="block text-sm font-medium mb-1">Risposta attesa</label>
                       <input value={qOpenAnswer} onChange={(e) => setQOpenAnswer(e.target.value)}
-                        className="input" placeholder="Es. Colosseo" />
+                        className={`input ${qFormErrorField === "openAnswer" ? "!border-danger !border-2" : ""}`}
+                        placeholder="Es. Colosseo" />
                       <p className="text-xs text-muted mt-1">
                         L&apos;immagine verrà mostrata inizialmente sfocata e si schiarirà col passare del tempo. Carica l&apos;immagine qui sopra.
                       </p>
@@ -758,9 +849,10 @@ export default function AdminPage() {
                       <div>
                         <label className="block text-sm font-medium mb-1">Parola da indovinare</label>
                         <input value={qOpenAnswer} onChange={(e) => setQOpenAnswer(e.target.value)}
-                          className="input" placeholder="Es. NAPOLI" />
+                          className={`input ${qFormErrorField === "openAnswer" ? "!border-danger !border-2" : ""}`}
+                          placeholder="Es. NAPOLI" />
                       </div>
-                      <div>
+                      <div className={qFormErrorField === "answers" ? "ring-2 ring-danger rounded-xl p-2 -m-2" : ""}>
                         <label className="block text-sm font-medium mb-1">3 indizi progressivi</label>
                         <p className="text-xs text-muted mb-2">
                           Il primo è vago, gli altri più diretti. Più presto indovina, più punti prende.
@@ -789,21 +881,22 @@ export default function AdminPage() {
                           if (!qWordTemplate) {
                             setQWordTemplate(v.split("").map((ch, i) => i % 2 === 1 ? "_" : ch).join(""));
                           }
-                        }} className="input font-mono uppercase" placeholder="Es. MILANO" />
+                        }} className={`input font-mono uppercase ${qFormErrorField === "openAnswer" ? "!border-danger !border-2" : ""}`} placeholder="Es. MILANO" />
                       </div>
                       <div>
                         <label className="block text-sm font-medium mb-1">
                           Template (usa _ per le lettere mancanti)
                         </label>
-                        <input value={qWordTemplate} onChange={(e) => setQWordTemplate(e.target.value.toUpperCase())} className="input font-mono uppercase tracking-widest" placeholder="Es. M_L_NO" />
+                        <input value={qWordTemplate} onChange={(e) => setQWordTemplate(e.target.value.toUpperCase())}
+                          className={`input font-mono uppercase tracking-widest ${qFormErrorField === "wordTemplate" ? "!border-danger !border-2" : ""}`} placeholder="Es. M_L_NO" />
                         <p className="text-xs text-muted mt-1">Lettere visibili ai giocatori · _ = lettera da indovinare</p>
                       </div>
                     </div>
                   )}
 
                   {qFormError && <div className="bg-danger/10 border border-danger/30 text-danger rounded-lg p-3 text-sm">{qFormError}</div>}
-                  <button onClick={saveQuestion} className="btn-primary w-full">
-                    {qEditId ? "Salva modifiche" : "Salva domanda"}
+                  <button onClick={saveQuestion} disabled={qSaving} className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed">
+                    {qSaving ? "Salvataggio..." : (qEditId ? "Salva modifiche" : "Salva domanda")}
                   </button>
                 </div>
               </div>
@@ -811,6 +904,19 @@ export default function AdminPage() {
 
             {/* Filtri */}
             <div className="flex flex-wrap gap-3 mb-4">
+              <div className="relative flex-1 min-w-[200px]">
+                <input
+                  value={qSearch}
+                  onChange={(e) => setQSearch(e.target.value)}
+                  placeholder="🔍 Cerca testo, risposta..."
+                  className="input pr-8"
+                />
+                {qSearch && (
+                  <button onClick={() => setQSearch("")}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-white text-sm"
+                    title="Pulisci ricerca">✕</button>
+                )}
+              </div>
               <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)} className="input w-auto">
                 <option value="">Tutte le categorie</option>
                 {categories.map((c) => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
@@ -826,7 +932,7 @@ export default function AdminPage() {
                 ))}
               </select>
               {/* Filtro pack: tutti / qualsiasi pack / nessun pack / pack specifico */}
-              <select value={filterPack} onChange={(e) => setFilterPack(e.target.value)} className="input w-auto">
+              <select value={filterPack} onChange={(e) => { setFilterPack(e.target.value); if (e.target.value !== viewingPackId) setViewingPackId(null); }} className="input w-auto">
                 <option value="">Tutti i pack (DB generale)</option>
                 <option value="any">📦 In qualsiasi pack</option>
                 <option value="none">— In nessun pack</option>
@@ -903,7 +1009,9 @@ export default function AdminPage() {
                         );
                       })()}
                       <button onClick={() => openEditQuestion(q)} className="text-accent hover:underline text-sm">Modifica</button>
-                      <button onClick={() => deleteQuestion(q.id)} className="text-danger hover:underline text-sm">Elimina</button>
+                      <button onClick={() => deleteQuestion(q.id)} disabled={deletingId === q.id} className="text-danger hover:underline text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                        {deletingId === q.id ? "…" : "Elimina"}
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -998,7 +1106,9 @@ export default function AdminPage() {
                       </div>
                       <div className="flex gap-3 flex-shrink-0 text-sm">
                         <button onClick={() => openEditCat(c)} className="text-accent hover:underline">Modifica</button>
-                        <button onClick={() => deleteCategory(c.id)} className="text-danger hover:underline">Elimina</button>
+                        <button onClick={() => deleteCategory(c.id)} disabled={deletingId === c.id} className="text-danger hover:underline disabled:opacity-50 disabled:cursor-not-allowed">
+                          {deletingId === c.id ? "…" : "Elimina"}
+                        </button>
                       </div>
                     </div>
                     {childrenOf(c.id).map((child) => renderCat(child, depth + 1))}
@@ -1110,16 +1220,19 @@ export default function AdminPage() {
                         {p.description && <p className="text-sm text-muted mt-1 line-clamp-2">{p.description}</p>}
                       </div>
                     </div>
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between flex-wrap gap-y-2">
                       <span className="text-xs text-muted">{p._count?.questions ?? 0} domande</span>
-                      <div className="flex gap-3 text-sm">
+                      <div className="flex gap-3 text-sm flex-wrap">
+                        <button onClick={() => viewPackQuestions(p.id)} className="text-muted hover:text-white">👁 Vedi domande</button>
                         {!active ? (
                           <button onClick={() => enterBuildMode(p.id)} className="text-accent hover:underline">🛠 Build mode</button>
                         ) : (
                           <span className="text-success font-semibold">● Attivo</span>
                         )}
                         <button onClick={() => openEditPack(p)} className="text-muted hover:text-white">Modifica</button>
-                        <button onClick={() => deletePack(p.id)} className="text-danger hover:underline">Elimina</button>
+                        <button onClick={() => deletePack(p.id)} disabled={deletingId === p.id} className="text-danger hover:underline disabled:opacity-50 disabled:cursor-not-allowed">
+                          {deletingId === p.id ? "…" : "Elimina"}
+                        </button>
                       </div>
                     </div>
                   </div>

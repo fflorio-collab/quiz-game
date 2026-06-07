@@ -1,4 +1,14 @@
 import { NextResponse } from "next/server";
+import { isAdmin } from "@/lib/admin-auth";
+
+// GET = controllo stato auth (per l'auto-detect lato client). Restituisce 200
+// solo se il cookie admin-token corrisponde a ADMIN_PASSWORD.
+export async function GET() {
+  if (!isAdmin()) {
+    return NextResponse.json({ authenticated: false }, { status: 401 });
+  }
+  return NextResponse.json({ authenticated: true });
+}
 
 export async function POST(req: Request) {
   const { password } = await req.json();

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useSocket } from "@/lib/useSocket";
+import { usePusherChannel } from "@/lib/pusher-client";
+import { useGameTick } from "@/lib/use-game-tick";
 import { playSound } from "@/lib/sound";
 import type {
   PlayerInfo,
@@ -21,7 +22,13 @@ type Phase = "LOBBY" | "QUESTION" | "JUDGING" | "REVEAL" | "FINISHED" | "JEOPARD
 export default function HostLobbyPage() {
   const { gameId } = useParams<{ gameId: string }>();
   const router = useRouter();
-  const { socket, isConnected } = useSocket();
+  // Migration vercel-pusher fase 7.6: due canali — game (eventi pubblici) + host (info riservate).
+  const gameChannel = usePusherChannel(gameId ? `game-${gameId}` : null);
+  const hostChannel = usePusherChannel(gameId ? `host-${gameId}` : null);
+  // Fase 8: polling tick — l'host è il principale candidato a innescare la
+  // fine-domanda automatica (ma il server è idempotente quindi qualunque
+  // client può triggerare). Intervallo 1s per UX più reattiva sulla pagina host.
+  const tick = useGameTick(gameId ?? null, { intervalMs: 1000 });
 
   const [code, setCode] = useState("");
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
@@ -62,79 +69,132 @@ export default function HostLobbyPage() {
     if (saved) setCode(saved);
   }, []);
 
+  // Countdown locale 1s tra i tick polling per animazione fluida.
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
-    if (!socket || !gameId) return;
+    if (tickRef.current) clearInterval(tickRef.current);
+    if (phase !== "QUESTION" || !question || question.timeLimit <= 0) return;
+    tickRef.current = setInterval(() => {
+      setRemaining((r) => {
+        const next = r > 0 ? r - 1 : 0;
+        if (next > 0 && next <= 5) playSound("tick");
+        return next;
+      });
+    }, 1000);
+    return () => {
+      if (tickRef.current) clearInterval(tickRef.current);
+    };
+  }, [phase, question]);
 
-    socket.emit("host:join", { gameId }, (res) => {
-      if (!res.success) {
-        // Partita scaduta o inesistente: pulisci localStorage
-        localStorage.removeItem("hostGameId");
-        localStorage.removeItem("hostCode");
-        alert(res.error || "Impossibile riconnettersi alla partita");
+  // Countdown locale speedrun.
+  const speedrunRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (speedrunRef.current) clearInterval(speedrunRef.current);
+    if (speedrunRemaining === null || speedrunRemaining <= 0) return;
+    speedrunRef.current = setInterval(() => {
+      setSpeedrunRemaining((r) => (r !== null && r > 0 ? r - 1 : r));
+    }, 1000);
+    return () => {
+      if (speedrunRef.current) clearInterval(speedrunRef.current);
+    };
+  }, [speedrunRemaining !== null]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fase 8: sincronizza i timer + duel dal tick server (autoritativo).
+  useEffect(() => {
+    if (!tick) return;
+    if (tick.questionRemaining !== null && phase === "QUESTION") {
+      setRemaining(tick.questionRemaining);
+    }
+    if (tick.speedrunRemaining !== speedrunRemaining) {
+      setSpeedrunRemaining(tick.speedrunRemaining);
+    }
+    if (tick.duel) setDuel(tick.duel);
+  }, [tick, phase, speedrunRemaining]);
+
+  // Rejoin via POST /api/game/[id]/snapshot (fase 7.4). Recupera anche duel:host-info.
+  useEffect(() => {
+    if (!gameId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/game/${gameId}/snapshot`, { method: "POST" });
+        const res = await r.json();
+        if (cancelled) return;
+        if (!r.ok || !res.success) {
+          localStorage.removeItem("hostGameId");
+          localStorage.removeItem("hostCode");
+          alert(res.error || "Impossibile riconnettersi alla partita");
+          router.push("/");
+          return;
+        }
+        const s = res.state;
+        if (s.code) setCode(s.code);
+        setPlayers(s.players);
+        if (typeof s.speedrunRemaining === "number") setSpeedrunRemaining(s.speedrunRemaining);
+        if (s.livesAllowed) setLivesAllowed(s.livesAllowed);
+        if (s.jeopardyGrid) setJeopardyGrid(s.jeopardyGrid);
+        if (s.duel && !s.duel.finished) setDuel(s.duel);
+        if (s.localPartyMode) setLocalPartyMode(true);
+        if (s.localState) {
+          setLocalJudgments(s.localState.judgments);
+          setActivePlayerId(s.localState.activePlayerId ?? null);
+        }
+        if (s.correctAnswerText) setLocalCorrectAnswer(s.correctAnswerText);
+        if (s.categoryPickMode) setCategoryPickMode(true);
+        if (s.categoryGrid) setCategoryGrid(s.categoryGrid);
+        if (s.gameStatus === "FINISHED") {
+          setFinalRanking(s.finalRanking ?? s.players);
+          setPhase("FINISHED");
+          return;
+        }
+        if (s.gameStatus === "LOBBY") {
+          setPhase("LOBBY");
+          return;
+        }
+        if (s.categoryGrid) {
+          setPhase("CATEGORY_PICK");
+        } else if (s.jeopardyGrid) {
+          setPhase("JEOPARDY_GRID");
+        } else if (s.judging) {
+          setJudgeData(s.judging);
+          const initial: Record<string, boolean> = {};
+          s.judging.answers.forEach((a: { playerId: string }) => { initial[a.playerId] = false; });
+          setJudgments(initial);
+          setPhase("JUDGING");
+        } else if (s.isRevealing && s.reveal) {
+          setReveal(s.reveal);
+          setPhase("REVEAL");
+        } else if (s.currentQuestion) {
+          setQuestion(s.currentQuestion);
+          setRemaining(s.remainingTime ?? s.currentQuestion.timeLimit);
+          setReveal(null);
+          setJudgeData(null);
+          setPhase("QUESTION");
+        }
+      } catch (e) {
+        if (cancelled) return;
+        alert(e instanceof Error ? e.message : "Errore di rete");
         router.push("/");
-        return;
       }
-      // Ripristina lo stato dallo snapshot
-      const s = res.state;
-      if (s.code) setCode(s.code);
-      setPlayers(s.players);
-      if (typeof s.speedrunRemaining === "number") setSpeedrunRemaining(s.speedrunRemaining);
-      if (s.livesAllowed) setLivesAllowed(s.livesAllowed);
-      if (s.jeopardyGrid) { setJeopardyGrid(s.jeopardyGrid); }
-      if (s.duel && !s.duel.finished) setDuel(s.duel);
-      if (s.localPartyMode) setLocalPartyMode(true);
-      if (s.localState) {
-        setLocalJudgments(s.localState.judgments);
-        setActivePlayerId(s.localState.activePlayerId ?? null);
-      }
-      if (s.correctAnswerText) setLocalCorrectAnswer(s.correctAnswerText);
-      if (s.categoryPickMode) setCategoryPickMode(true);
-      if (s.categoryGrid) setCategoryGrid(s.categoryGrid);
-      if (s.gameStatus === "FINISHED") {
-        setFinalRanking(s.finalRanking ?? s.players);
-        setPhase("FINISHED");
-        return;
-      }
-      if (s.gameStatus === "LOBBY") {
-        setPhase("LOBBY");
-        return;
-      }
-      // PLAYING
-      if (s.categoryGrid) {
-        setPhase("CATEGORY_PICK");
-      } else if (s.jeopardyGrid) {
-        setPhase("JEOPARDY_GRID");
-      } else if (s.judging) {
-        setJudgeData(s.judging);
-        const initial: Record<string, boolean> = {};
-        s.judging.answers.forEach((a) => { initial[a.playerId] = false; });
-        setJudgments(initial);
-        setPhase("JUDGING");
-      } else if (s.isRevealing && s.reveal) {
-        setReveal(s.reveal);
-        setPhase("REVEAL");
-      } else if (s.currentQuestion) {
-        setQuestion(s.currentQuestion);
-        setRemaining(s.remainingTime ?? s.currentQuestion.timeLimit);
-        setReveal(null);
-        setJudgeData(null);
-        setPhase("QUESTION");
-      }
-    });
+    })();
+    return () => { cancelled = true; };
+  }, [gameId, router]);
 
-    socket.on("lobby:updated", ({ players }) => {
+  // Listener canale pubblico game-{gameId}.
+  useEffect(() => {
+    if (!gameChannel) return;
+
+    const onLobbyUpdated = ({ players }: { players: PlayerInfo[] }) => {
       setPlayers((prev) => {
         if (players.length > prev.length) playSound("join");
         return players;
       });
-    });
-
-    socket.on("lobby:started", () => {
+    };
+    const onLobbyStarted = () => {
       playSound("start");
       setPhase("QUESTION");
-    });
-
-    socket.on("game:question", (q) => {
+    };
+    const onGameQuestion = (q: QuestionData) => {
       setQuestion(q);
       setReveal(null);
       setJudgeData(null);
@@ -145,146 +205,174 @@ export default function HostLobbyPage() {
       setLocalCorrectAnswer("");
       setCategoryGrid(null);
       setPhase("QUESTION");
-    });
-
-    socket.on("game:speedrun-timer", ({ remaining }) => setSpeedrunRemaining(remaining));
-    socket.on("game:jeopardy-grid", (data) => {
+    };
+    const onJeopardyGrid = (data: JeopardyGridData) => {
       setJeopardyGrid(data);
       setPhase("JEOPARDY_GRID");
-    });
-    socket.on("game:category-grid", (data) => {
+    };
+    const onCategoryGrid = (data: CategoryGridData) => {
       setCategoryGrid(data);
       setPhase("CATEGORY_PICK");
-    });
-
-    socket.on("game:timer", ({ remaining }) => {
-      setRemaining(remaining);
-      if (remaining > 0 && remaining <= 5) playSound("tick");
-    });
-
-    socket.on("game:answer-received", () => {
-      setAnsweredCount((c) => c + 1);
-    });
-
-    // Richiesta giudizio risposte aperte (OPEN_ANSWER / IMAGE_GUESS)
-    socket.on("game:judge-answers", (data) => {
+    };
+    const onAnswerReceived = () => setAnsweredCount((c) => c + 1);
+    const onJudgeAnswers = (data: JudgeAnswersData) => {
       setJudgeData(data);
       const initial: Record<string, boolean> = {};
       data.answers.forEach((a) => { initial[a.playerId] = false; });
       setJudgments(initial);
       setPhase("JUDGING");
-    });
-
-    socket.on("game:reveal", (data) => {
+    };
+    const onReveal = (data: RevealData) => {
       setReveal(data);
       setPhase("REVEAL");
-    });
-
-    socket.on("game:leaderboard", ({ players }) => {
-      setPlayers(players);
-    });
-
-    socket.on("game:finished", ({ players }) => {
+    };
+    const onLeaderboard = ({ players }: { players: PlayerInfo[] }) => setPlayers(players);
+    const onFinished = ({ players }: { players: PlayerInfo[] }) => {
       playSound("finish");
       setFinalRanking(players);
       setPhase("FINISHED");
-    });
-
-    socket.on("duel:state", (st) => setDuel(st));
-    socket.on("duel:host-info", ({ correctAnswer }) => setDuelAnswer(correctAnswer));
-    socket.on("duel:ended", ({ winnerNickname, loserNickname }) => {
+    };
+    const onDuelState = (st: DuelState) => setDuel(st);
+    const onDuelEnded = ({ winnerNickname, loserNickname }: { winnerNickname: string; loserNickname: string }) => {
       setDuelEnded({ winnerNickname, loserNickname });
       setTimeout(() => { setDuelEnded(null); setDuel(null); setDuelAnswer(""); }, 5000);
-    });
-
-    // Modalità presentatore
-    socket.on("game:local-state", (s: LocalRoundState) => {
+    };
+    const onLocalState = (s: LocalRoundState) => {
       setLocalJudgments(s.judgments);
       setActivePlayerId(s.activePlayerId ?? null);
-    });
-    socket.on("game:local-host-info", ({ correctAnswerText }) => setLocalCorrectAnswer(correctAnswerText));
+    };
+
+    gameChannel.bind("lobby:updated", onLobbyUpdated);
+    gameChannel.bind("lobby:started", onLobbyStarted);
+    gameChannel.bind("game:question", onGameQuestion);
+    gameChannel.bind("game:jeopardy-grid", onJeopardyGrid);
+    gameChannel.bind("game:category-grid", onCategoryGrid);
+    gameChannel.bind("game:answer-received", onAnswerReceived);
+    gameChannel.bind("game:judge-answers", onJudgeAnswers);
+    gameChannel.bind("game:reveal", onReveal);
+    gameChannel.bind("game:leaderboard", onLeaderboard);
+    gameChannel.bind("game:finished", onFinished);
+    gameChannel.bind("duel:state", onDuelState);
+    gameChannel.bind("duel:ended", onDuelEnded);
+    gameChannel.bind("game:local-state", onLocalState);
 
     return () => {
-      socket.off("lobby:updated");
-      socket.off("lobby:started");
-      socket.off("game:question");
-      socket.off("game:timer");
-      socket.off("game:answer-received");
-      socket.off("game:judge-answers");
-      socket.off("game:reveal");
-      socket.off("game:leaderboard");
-      socket.off("game:finished");
-      socket.off("game:speedrun-timer");
-      socket.off("game:jeopardy-grid");
-      socket.off("duel:state");
-      socket.off("duel:host-info");
-      socket.off("duel:ended");
-      socket.off("game:local-state");
-      socket.off("game:local-host-info");
-      socket.off("game:category-grid");
+      gameChannel.unbind("lobby:updated", onLobbyUpdated);
+      gameChannel.unbind("lobby:started", onLobbyStarted);
+      gameChannel.unbind("game:question", onGameQuestion);
+      gameChannel.unbind("game:jeopardy-grid", onJeopardyGrid);
+      gameChannel.unbind("game:category-grid", onCategoryGrid);
+      gameChannel.unbind("game:answer-received", onAnswerReceived);
+      gameChannel.unbind("game:judge-answers", onJudgeAnswers);
+      gameChannel.unbind("game:reveal", onReveal);
+      gameChannel.unbind("game:leaderboard", onLeaderboard);
+      gameChannel.unbind("game:finished", onFinished);
+      gameChannel.unbind("duel:state", onDuelState);
+      gameChannel.unbind("duel:ended", onDuelEnded);
+      gameChannel.unbind("game:local-state", onLocalState);
     };
-  }, [socket, gameId, router]);
+  }, [gameChannel]);
 
-  const startGame = () => socket?.emit("host:start", { gameId });
-  const nextQuestion = () => socket?.emit("host:next", { gameId });
-  const endQuestion = () => socket?.emit("host:endQuestion", { gameId });
-  const pickCell = (gameQuestionId: string) => socket?.emit("host:jeopardy-pick", { gameId, gameQuestionId });
+  // Listener canale riservato host-{gameId}: soluzioni domanda e info host-only.
+  useEffect(() => {
+    if (!hostChannel) return;
+    const onDuelHostInfo = ({ correctAnswer }: { correctAnswer: string }) => setDuelAnswer(correctAnswer);
+    const onLocalHostInfo = ({ correctAnswerText }: { correctAnswerText: string }) => setLocalCorrectAnswer(correctAnswerText);
+    hostChannel.bind("duel:host-info", onDuelHostInfo);
+    hostChannel.bind("game:local-host-info", onLocalHostInfo);
+    return () => {
+      hostChannel.unbind("duel:host-info", onDuelHostInfo);
+      hostChannel.unbind("game:local-host-info", onLocalHostInfo);
+    };
+  }, [hostChannel]);
+
+  // Helper minimo per chiamare un POST sull'API del gioco; fire-and-forget per le azioni
+  // semplici (start/next/end-question/jeopardy-pick/finish/judge): il client riceve la
+  // risposta tramite Pusher, quindi qui ignoriamo la response salvo errori.
+  const postGame = async (path: string, body?: object) => {
+    try {
+      await fetch(`/api/game/${gameId}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch { /* silent */ }
+  };
+
+  const startGame = () => postGame("/start");
+  const nextQuestion = () => postGame("/next");
+  const endQuestion = () => postGame("/end-question");
+  const pickCell = (gameQuestionId: string) => postGame("/jeopardy-pick", { gameQuestionId });
   const playAgain = () => router.push("/host");
 
-  const addLocalPlayer = () => {
-    if (!socket) return;
+  const addLocalPlayer = async () => {
     const name = addPlayerName.trim();
     if (!name) { setAddPlayerError("Inserisci un nickname"); return; }
     setAddingPlayer(true);
     setAddPlayerError("");
-    socket.emit("host:local-add-player", { gameId, nickname: name, emoji: addPlayerEmoji }, (res) => {
-      setAddingPlayer(false);
-      if ("error" in res) { setAddPlayerError(res.error); return; }
+    try {
+      const r = await fetch(`/api/game/${gameId}/local-player`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nickname: name, emoji: addPlayerEmoji }),
+      });
+      const res = await r.json();
+      if (!r.ok) { setAddPlayerError(res.error || "Errore"); return; }
       setAddPlayerName("");
-    });
+    } catch (e) {
+      setAddPlayerError(e instanceof Error ? e.message : "Errore di rete");
+    } finally {
+      setAddingPlayer(false);
+    }
   };
+
   const removeLocalPlayer = (playerId: string) => {
-    if (!socket) return;
-    socket.emit("host:local-remove-player", { gameId, playerId });
+    fetch(`/api/game/${gameId}/local-player/${playerId}`, { method: "DELETE" }).catch(() => {});
   };
-  const localJudge = (playerId: string, isCorrect: boolean) => {
-    if (!socket) return;
-    socket.emit("host:local-judge", { gameId, playerId, isCorrect });
-  };
-  const setLocalTurn = (playerId: string | null) => {
-    if (!socket) return;
-    socket.emit("host:local-set-turn", { gameId, playerId });
-  };
-  const pickCategory = (categoryId: string) => {
-    if (!socket) return;
-    socket.emit("host:category-pick", { gameId, categoryId });
-  };
+  const localJudge = (playerId: string, isCorrect: boolean) => postGame("/local-judge", { playerId, isCorrect });
+  const setLocalTurn = (playerId: string | null) => postGame("/local-turn", { playerId });
+  const pickCategory = (categoryId: string) => postGame("/category-pick", { categoryId });
   const finishGameEarly = () => {
-    if (!socket) return;
     if (!window.confirm("Terminare la partita ora? La classifica finale verrà calcolata con i punti attuali.")) return;
-    socket.emit("host:finish", { gameId });
+    postGame("/finish");
   };
 
   const submitJudgments = () => {
-    if (!socket || !judgeData) return;
-    const list = Object.entries(judgments).map(([playerId, isCorrect]) => ({
-      playerId,
-      isCorrect,
-    }));
-    socket.emit("host:judge", { gameId, judgments: list });
+    if (!judgeData) return;
+    const list = Object.entries(judgments).map(([playerId, isCorrect]) => ({ playerId, isCorrect }));
+    postGame("/judge", { judgments: list });
   };
 
-  const startDuel = () => {
-    if (!socket || !duelPickA || !duelPickB || duelPickA === duelPickB) return;
-    socket.emit("duel:start", { gameId, playerAId: duelPickA, playerBId: duelPickB, durationSec: duelDuration }, (res) => {
-      if ("error" in res) alert(res.error);
-      else setShowDuelPicker(false);
-    });
+  const startDuel = async () => {
+    if (!duelPickA || !duelPickB || duelPickA === duelPickB) return;
+    try {
+      const r = await fetch(`/api/game/${gameId}/duel/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playerAId: duelPickA, playerBId: duelPickB, durationSec: duelDuration }),
+      });
+      const res = await r.json();
+      if (!r.ok) { alert(res.error || "Errore"); return; }
+      setShowDuelPicker(false);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Errore di rete");
+    }
   };
-  const stopDuel = () => socket?.emit("duel:stop", { gameId });
+  const stopDuel = () => { fetch(`/api/game/${gameId}/duel/stop`, { method: "POST" }).catch(() => {}); };
   const toggleDuelPause = () => {
-    if (!socket || !duel) return;
-    socket.emit("duel:pause", { gameId, paused: !duel.paused });
+    if (!duel) return;
+    fetch(`/api/game/${gameId}/duel/pause`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paused: !duel.paused }),
+    }).catch(() => {});
+  };
+  const judgeDuel = (isCorrect: boolean) => {
+    fetch(`/api/game/${gameId}/duel/judge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isCorrect }),
+    }).catch(() => {});
   };
 
   // === RENDER ===
@@ -343,11 +431,11 @@ export default function HostLobbyPage() {
               <p className="text-sm text-muted mb-3">Giudica la risposta detta a voce</p>
               <div className="flex gap-2 justify-center">
                 <button
-                  onClick={() => socket?.emit("duel:judge", { gameId, isCorrect: true })}
+                  onClick={() => judgeDuel(true)}
                   className="btn-primary flex-1 text-lg py-4"
                 >✓ Corretta</button>
                 <button
-                  onClick={() => socket?.emit("duel:judge", { gameId, isCorrect: false })}
+                  onClick={() => judgeDuel(false)}
                   className="btn-secondary flex-1 text-lg py-4"
                 >✗ Sbagliata / non sa</button>
               </div>
@@ -513,7 +601,7 @@ export default function HostLobbyPage() {
           </div>
 
           {remaining === 0 && (
-            <button onClick={() => socket?.emit("host:next", { gameId })} className="btn-primary w-full mt-6">
+            <button onClick={nextQuestion} className="btn-primary w-full mt-6">
               Termina partita
             </button>
           )}
@@ -1206,9 +1294,6 @@ export default function HostLobbyPage() {
         <div className="card mb-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold">Giocatori ({players.length})</h2>
-            {!isConnected && (
-              <span className="text-warning text-sm">Riconnessione...</span>
-            )}
           </div>
           {players.length === 0 ? (
             <p className="text-muted text-center py-8">

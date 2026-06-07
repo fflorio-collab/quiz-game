@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useSocket } from "@/lib/useSocket";
+import { usePusherChannel } from "@/lib/pusher-client";
+import { useGameTick } from "@/lib/use-game-tick";
 import type {
   PlayerInfo,
   QuestionData,
@@ -17,7 +18,11 @@ type Phase = "LOBBY" | "QUESTION" | "REVEAL" | "FINISHED" | "CATEGORY_PICK";
 export default function SpectatorViewerPage() {
   const { gameId } = useParams<{ gameId: string }>();
   const router = useRouter();
-  const { socket, isConnected } = useSocket();
+  // Migration vercel-pusher fase 7.6: usePusherChannel al posto di useSocket.
+  const channel = usePusherChannel(gameId ? `game-${gameId}` : null);
+  // Fase 8: polling del tick per timer accurati + auto-fine domanda.
+  // Disabilita quando la partita è finita: niente da rinfrescare.
+  const tick = useGameTick(gameId ?? null, { intervalMs: 2000 });
 
   const [code, setCode] = useState("");
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
@@ -34,59 +39,105 @@ export default function SpectatorViewerPage() {
   const [categoryGrid, setCategoryGrid] = useState<CategoryGridData | null>(null);
   const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
 
+  // Countdown locale 1s tra un tick e l'altro per animazione fluida; la verità
+  // (vedi sotto) la sovrascrive dal server ogni 2s.
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (tickRef.current) clearInterval(tickRef.current);
+    if (phase !== "QUESTION" || !question || question.timeLimit <= 0) return;
+    tickRef.current = setInterval(() => {
+      setRemaining((r) => (r > 0 ? r - 1 : 0));
+    }, 1000);
+    return () => {
+      if (tickRef.current) clearInterval(tickRef.current);
+    };
+  }, [phase, question]);
+
+  // Sincronizza i timer dal server tick (fase 8): se c'è una domanda attiva
+  // sovrascrive `remaining` con il valore autoritativo. Speedrun idem.
+  useEffect(() => {
+    if (!tick) return;
+    if (tick.questionRemaining !== null && phase === "QUESTION") {
+      setRemaining(tick.questionRemaining);
+    }
+    if (tick.speedrunRemaining !== speedrunRemaining) {
+      setSpeedrunRemaining(tick.speedrunRemaining);
+    }
+  }, [tick, phase, speedrunRemaining]);
+
   useEffect(() => {
     const saved = localStorage.getItem("spectatorCode");
     if (saved) setCode(saved);
   }, []);
 
+  // Rejoin: POST /api/spectator (fase 7.1) per recuperare lo snapshot iniziale.
   useEffect(() => {
-    if (!socket || !gameId) return;
-
+    if (!gameId) return;
     const savedCode = localStorage.getItem("spectatorCode") || "";
     if (!savedCode) { router.push("/spectator"); return; }
 
-    socket.emit("spectator:join", { code: savedCode }, (res) => {
-      if (!res.success) {
-        localStorage.removeItem("spectatorGameId");
-        localStorage.removeItem("spectatorCode");
-        alert(res.error || "Impossibile seguire questa partita");
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/spectator", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: savedCode }),
+        });
+        const res = await r.json();
+        if (cancelled) return;
+        if (!r.ok || !res.success) {
+          localStorage.removeItem("spectatorGameId");
+          localStorage.removeItem("spectatorCode");
+          alert(res.error || "Impossibile seguire questa partita");
+          router.push("/spectator");
+          return;
+        }
+        const s = res.state;
+        if (s.code) setCode(s.code);
+        setPlayers(s.players);
+        if (typeof s.speedrunRemaining === "number") setSpeedrunRemaining(s.speedrunRemaining);
+        if (s.livesAllowed) setLivesAllowed(s.livesAllowed);
+        if (s.localPartyMode) setLocalPartyMode(true);
+        if (s.localState) setLocalJudgments(s.localState.judgments);
+        if (s.localState) setActivePlayerId(s.localState.activePlayerId ?? null);
+        if (s.categoryGrid) { setCategoryGrid(s.categoryGrid); setPhase("CATEGORY_PICK"); return; }
+
+        if (s.gameStatus === "FINISHED") {
+          setFinalRanking(s.finalRanking ?? s.players);
+          setPhase("FINISHED");
+          return;
+        }
+        if (s.gameStatus === "LOBBY") { setPhase("LOBBY"); return; }
+        // PLAYING
+        if (s.isRevealing && s.reveal) {
+          setReveal(s.reveal);
+          setPhase("REVEAL");
+        } else if (s.currentQuestion) {
+          setQuestion(s.currentQuestion);
+          setRemaining(s.remainingTime ?? s.currentQuestion.timeLimit);
+          setReveal(null);
+          setPhase("QUESTION");
+        } else {
+          setPhase("LOBBY");
+        }
+      } catch (e) {
+        if (cancelled) return;
+        alert(e instanceof Error ? e.message : "Errore di rete");
         router.push("/spectator");
-        return;
       }
-      const s = res.state;
-      if (s.code) setCode(s.code);
-      setPlayers(s.players);
-      if (typeof s.speedrunRemaining === "number") setSpeedrunRemaining(s.speedrunRemaining);
-      if (s.livesAllowed) setLivesAllowed(s.livesAllowed);
-      if (s.localPartyMode) setLocalPartyMode(true);
-      if (s.localState) setLocalJudgments(s.localState.judgments);
-      if (s.localState) setActivePlayerId(s.localState.activePlayerId ?? null);
-      if (s.categoryGrid) { setCategoryGrid(s.categoryGrid); setPhase("CATEGORY_PICK"); return; }
+    })();
 
-      if (s.gameStatus === "FINISHED") {
-        setFinalRanking(s.finalRanking ?? s.players);
-        setPhase("FINISHED");
-        return;
-      }
-      if (s.gameStatus === "LOBBY") { setPhase("LOBBY"); return; }
-      // PLAYING
-      if (s.isRevealing && s.reveal) {
-        setReveal(s.reveal);
-        setPhase("REVEAL");
-      } else if (s.currentQuestion) {
-        setQuestion(s.currentQuestion);
-        setRemaining(s.remainingTime ?? s.currentQuestion.timeLimit);
-        setReveal(null);
-        setPhase("QUESTION");
-      } else {
-        setPhase("LOBBY");
-      }
-    });
+    return () => { cancelled = true; };
+  }, [gameId, router]);
 
-    socket.on("lobby:updated", ({ players }) => setPlayers(players));
-    socket.on("lobby:started", () => setPhase("QUESTION"));
+  // Listener Pusher sul canale game-{gameId}.
+  useEffect(() => {
+    if (!channel) return;
 
-    socket.on("game:question", (q) => {
+    const onLobbyUpdated = ({ players }: { players: PlayerInfo[] }) => setPlayers(players);
+    const onLobbyStarted = () => setPhase("QUESTION");
+    const onGameQuestion = (q: QuestionData) => {
       setQuestion(q);
       setReveal(null);
       setAnsweredPlayerIds(new Set());
@@ -94,40 +145,54 @@ export default function SpectatorViewerPage() {
       setLocalJudgments({});
       setPhase("QUESTION");
       setCategoryGrid(null);
-    });
-
-    socket.on("game:timer", ({ remaining }) => setRemaining(remaining));
-    socket.on("game:answer-received", ({ playerId }) => {
+    };
+    const onAnswerReceived = ({ playerId }: { playerId: string }) => {
       setAnsweredPlayerIds((prev) => {
         const next = new Set(prev);
         next.add(playerId);
         return next;
       });
-    });
-    socket.on("game:reveal", (data) => { setReveal(data); setPhase("REVEAL"); });
-    socket.on("game:leaderboard", ({ players }) => setPlayers(players));
-    socket.on("game:finished", ({ players }) => { setFinalRanking(players); setPhase("FINISHED"); });
-    socket.on("game:speedrun-timer", ({ remaining }) => setSpeedrunRemaining(remaining));
-    socket.on("game:local-state", (s: LocalRoundState) => {
+    };
+    const onReveal = (data: RevealData) => { setReveal(data); setPhase("REVEAL"); };
+    const onLeaderboard = ({ players }: { players: PlayerInfo[] }) => setPlayers(players);
+    const onFinished = ({ players }: { players: PlayerInfo[] }) => {
+      setFinalRanking(players);
+      setPhase("FINISHED");
+    };
+    const onSpeedrunTimer = ({ remaining }: { remaining: number }) => setSpeedrunRemaining(remaining);
+    const onLocalState = (s: LocalRoundState) => {
       setLocalJudgments(s.judgments);
       setActivePlayerId(s.activePlayerId ?? null);
-    });
-    socket.on("game:category-grid", (data) => { setCategoryGrid(data); setPhase("CATEGORY_PICK"); });
+    };
+    const onCategoryGrid = (data: CategoryGridData) => {
+      setCategoryGrid(data);
+      setPhase("CATEGORY_PICK");
+    };
+
+    channel.bind("lobby:updated", onLobbyUpdated);
+    channel.bind("lobby:started", onLobbyStarted);
+    channel.bind("game:question", onGameQuestion);
+    channel.bind("game:answer-received", onAnswerReceived);
+    channel.bind("game:reveal", onReveal);
+    channel.bind("game:leaderboard", onLeaderboard);
+    channel.bind("game:finished", onFinished);
+    channel.bind("game:speedrun-timer", onSpeedrunTimer);
+    channel.bind("game:local-state", onLocalState);
+    channel.bind("game:category-grid", onCategoryGrid);
 
     return () => {
-      socket.off("lobby:updated");
-      socket.off("lobby:started");
-      socket.off("game:question");
-      socket.off("game:timer");
-      socket.off("game:answer-received");
-      socket.off("game:reveal");
-      socket.off("game:leaderboard");
-      socket.off("game:finished");
-      socket.off("game:speedrun-timer");
-      socket.off("game:local-state");
-      socket.off("game:category-grid");
+      channel.unbind("lobby:updated", onLobbyUpdated);
+      channel.unbind("lobby:started", onLobbyStarted);
+      channel.unbind("game:question", onGameQuestion);
+      channel.unbind("game:answer-received", onAnswerReceived);
+      channel.unbind("game:reveal", onReveal);
+      channel.unbind("game:leaderboard", onLeaderboard);
+      channel.unbind("game:finished", onFinished);
+      channel.unbind("game:speedrun-timer", onSpeedrunTimer);
+      channel.unbind("game:local-state", onLocalState);
+      channel.unbind("game:category-grid", onCategoryGrid);
     };
-  }, [socket, gameId, router]);
+  }, [channel]);
 
   const exit = () => {
     localStorage.removeItem("spectatorGameId");
@@ -488,7 +553,6 @@ export default function SpectatorViewerPage() {
         <div className="flex items-center justify-between mb-6">
           <button onClick={exit} className="text-sm text-muted hover:text-white">‹ Esci</button>
           <div className="chip-gold">👁 Spettatore</div>
-          {!isConnected && <span className="text-warning text-sm">Riconnessione...</span>}
         </div>
 
         <div className="text-center mb-8">

@@ -4,6 +4,9 @@ import { isAdmin } from "@/lib/admin-auth";
 import { Prisma } from "@prisma/client";
 
 export async function GET() {
+  if (!isAdmin()) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
   const categories = await prisma.category.findMany({
     orderBy: { name: "asc" },
     include: {

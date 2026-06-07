@@ -3,12 +3,10 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, Suspense } from "react";
 import Link from "next/link";
-import { useSocket } from "@/lib/useSocket";
 
 function SpectatorEntry() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { socket, isConnected } = useSocket();
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -18,21 +16,29 @@ function SpectatorEntry() {
     if (paramCode) setCode(paramCode.toUpperCase());
   }, [searchParams]);
 
-  const follow = () => {
-    if (!socket) return;
+  // Migration vercel-pusher fase 7.6: POST /api/spectator invece di socket.emit("spectator:join").
+  const follow = async () => {
     if (!code.trim() || code.length !== 6) {
       setError("Il codice deve essere di 6 caratteri");
       return;
     }
     setLoading(true);
     setError("");
-    socket.emit("spectator:join", { code: code.trim().toUpperCase() }, (res) => {
-      setLoading(false);
-      if (!res.success) { setError(res.error); return; }
+    try {
+      const r = await fetch("/api/spectator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: code.trim().toUpperCase() }),
+      });
+      const res = await r.json();
+      if (!r.ok) { setError(res.error || "Errore"); setLoading(false); return; }
       localStorage.setItem("spectatorGameId", res.gameId);
       localStorage.setItem("spectatorCode", code.trim().toUpperCase());
       router.push(`/spectator/${res.gameId}`);
-    });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Errore di rete");
+      setLoading(false);
+    }
   };
 
   return (
@@ -73,10 +79,10 @@ function SpectatorEntry() {
 
             <button
               onClick={follow}
-              disabled={loading || !isConnected}
+              disabled={loading}
               className="btn-primary w-full"
             >
-              {loading ? "Connessione..." : !isConnected ? "Connessione al server..." : "Segui la partita"}
+              {loading ? "Connessione..." : "Segui la partita"}
             </button>
           </div>
         </div>

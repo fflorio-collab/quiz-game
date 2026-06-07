@@ -4,7 +4,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, Suspense } from "react";
 import Link from "next/link";
 import { QRCodeSVG } from "qrcode.react";
-import { useSocket } from "@/lib/useSocket";
 
 const EMOJIS = [
   "😀","😎","🦊","🐱","🐶","🦄","🦁","🐸",
@@ -16,7 +15,6 @@ const EMOJIS = [
 function PlayerContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { socket, isConnected } = useSocket();
 
   const [code, setCode] = useState("");
   const [nickname, setNickname] = useState("");
@@ -64,28 +62,37 @@ function PlayerContent() {
     if (fileRef.current) fileRef.current.value = "";
   };
 
-  const joinGame = () => {
-    if (!socket) return;
+  // Migration vercel-pusher fase 7.6: POST /api/player invece di socket.emit("player:join").
+  const joinGame = async () => {
     if (!code.trim() || code.length !== 6) { setError("Il codice deve essere di 6 caratteri"); return; }
     if (!nickname.trim()) { setError("Inserisci il tuo nickname"); return; }
     setLoading(true);
     setError("");
-    socket.emit(
-      "player:join",
-      { code: code.trim().toUpperCase(), nickname: nickname.trim(), emoji: selectedEmoji, avatarUrl: avatarUrl ?? undefined },
-      (res) => {
-        setLoading(false);
-        if ("error" in res) { setError(res.error); return; }
-        localStorage.setItem("playerId", res.playerId);
-        localStorage.setItem("playerGameId", res.gameId);
-        localStorage.setItem("playerGameCode", code.trim().toUpperCase());
-        localStorage.setItem("playerNickname", nickname.trim());
-        localStorage.setItem("playerEmoji", selectedEmoji);
-        if (avatarUrl) localStorage.setItem("playerAvatarUrl", avatarUrl);
-        else localStorage.removeItem("playerAvatarUrl");
-        router.push(`/play/${res.gameId}`);
-      }
-    );
+    try {
+      const r = await fetch("/api/player", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: code.trim().toUpperCase(),
+          nickname: nickname.trim(),
+          emoji: selectedEmoji,
+          avatarUrl: avatarUrl ?? undefined,
+        }),
+      });
+      const res = await r.json();
+      if (!r.ok) { setError(res.error || "Errore"); setLoading(false); return; }
+      localStorage.setItem("playerId", res.playerId);
+      localStorage.setItem("playerGameId", res.gameId);
+      localStorage.setItem("playerGameCode", code.trim().toUpperCase());
+      localStorage.setItem("playerNickname", nickname.trim());
+      localStorage.setItem("playerEmoji", selectedEmoji);
+      if (avatarUrl) localStorage.setItem("playerAvatarUrl", avatarUrl);
+      else localStorage.removeItem("playerAvatarUrl");
+      router.push(`/play/${res.gameId}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Errore di rete");
+      setLoading(false);
+    }
   };
 
   return (
@@ -209,10 +216,10 @@ function PlayerContent() {
 
           <button
             onClick={joinGame}
-            disabled={loading || !isConnected || uploading}
+            disabled={loading || uploading}
             className="btn-primary w-full text-lg py-4"
           >
-            {loading ? "Accesso in corso..." : !isConnected ? "Connessione..." : "🎯 Entra in scena"}
+            {loading ? "Accesso in corso..." : "🎯 Entra in scena"}
           </button>
         </div>
 

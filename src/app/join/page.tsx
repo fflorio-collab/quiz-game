@@ -3,12 +3,10 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, Suspense } from "react";
 import Link from "next/link";
-import { useSocket } from "@/lib/useSocket";
 
 function JoinContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { socket, isConnected } = useSocket();
   const [code, setCode] = useState("");
   const [nickname, setNickname] = useState("");
   const [loading, setLoading] = useState(false);
@@ -20,8 +18,8 @@ function JoinContent() {
     if (paramCode) setCode(paramCode.toUpperCase());
   }, [searchParams]);
 
-  const joinGame = () => {
-    if (!socket) return;
+  // Migration vercel-pusher fase 7.6: POST /api/player al posto di socket.emit("player:join").
+  const joinGame = async () => {
     if (!code.trim() || code.length !== 6) {
       setError("Il codice deve essere di 6 caratteri");
       return;
@@ -30,26 +28,28 @@ function JoinContent() {
       setError("Inserisci il tuo nickname");
       return;
     }
-
     setLoading(true);
     setError("");
-
-    socket.emit(
-      "player:join",
-      { code: code.trim().toUpperCase(), nickname: nickname.trim() },
-      (res) => {
-        setLoading(false);
-        if ("error" in res) {
-          setError(res.error);
-          return;
-        }
-        localStorage.setItem("playerId", res.playerId);
-        localStorage.setItem("playerGameId", res.gameId);
-        localStorage.setItem("playerGameCode", code.trim().toUpperCase());
-        localStorage.setItem("playerNickname", nickname.trim());
-        router.push(`/play/${res.gameId}`);
-      }
-    );
+    try {
+      const r = await fetch("/api/player", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: code.trim().toUpperCase(),
+          nickname: nickname.trim(),
+        }),
+      });
+      const res = await r.json();
+      if (!r.ok) { setError(res.error || "Errore"); setLoading(false); return; }
+      localStorage.setItem("playerId", res.playerId);
+      localStorage.setItem("playerGameId", res.gameId);
+      localStorage.setItem("playerGameCode", code.trim().toUpperCase());
+      localStorage.setItem("playerNickname", nickname.trim());
+      router.push(`/play/${res.gameId}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Errore di rete");
+      setLoading(false);
+    }
   };
 
   return (
@@ -104,14 +104,10 @@ function JoinContent() {
 
             <button
               onClick={joinGame}
-              disabled={loading || !isConnected}
+              disabled={loading}
               className="btn-primary w-full"
             >
-              {loading
-                ? "Accesso..."
-                : !isConnected
-                  ? "Connessione al server..."
-                  : "Entra"}
+              {loading ? "Accesso..." : "Entra"}
             </button>
           </div>
         </div>
