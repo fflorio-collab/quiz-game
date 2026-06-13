@@ -4,7 +4,8 @@ import { calculatePoints, streakMultiplier } from "@/lib/utils";
 import { QUESTION_TYPE_META } from "@/lib/questionTypes";
 import { broadcastToGame } from "@/lib/pusher-server";
 import { resolveTimeLimit } from "@/lib/game-snapshot";
-import { resolveBasePoints, handleQuestionEnd } from "@/lib/game-actions";
+import { resolveBasePoints, handleQuestionEnd, passTurn } from "@/lib/game-actions";
+import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId } from "@/lib/turn";
 import type { QuestionType } from "@/types/socket";
 
 // Migrazione vercel-pusher fase 7.2.
@@ -53,6 +54,26 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     where: { playerId_gameQuestionId: { playerId, gameQuestionId: currentGQ.id } },
   });
   if (existing) return NextResponse.json({ error: "Hai già risposto" }, { status: 409 });
+
+  // Modalità a turni: solo il giocatore di turno può rispondere. Gli altri sono
+  // bloccati lato server (oltre che in UI). activeOrder/attemptsBefore vengono
+  // riusati sotto per decidere la fine domanda.
+  const turnCfg = resolveTurnConfig(game);
+  let activeOrder: string[] = [];
+  let attemptsBefore = 0;
+  if (turnCfg.turnBased) {
+    const turnPlayers = await prisma.player.findMany({
+      where: { gameId },
+      orderBy: { joinedAt: "asc" },
+      select: { id: true, eliminated: true, joinedAt: true },
+    });
+    activeOrder = parseActiveTurnOrder(game.turnOrder, turnPlayers);
+    attemptsBefore = await prisma.playerAnswer.count({ where: { gameQuestionId: currentGQ.id } });
+    const turnId = turnPlayerId(activeOrder, game.currentIndex, attemptsBefore);
+    if (turnId && turnId !== playerId) {
+      return NextResponse.json({ error: "Non è il tuo turno" }, { status: 403 });
+    }
+  }
 
   const questionType = currentGQ.question.type as QuestionType;
   const effTimeLimit = resolveTimeLimit(game, currentGQ.question.timeLimit);
@@ -152,11 +173,31 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   await broadcastToGame(gameId, "game:answer-received", { playerId });
 
-  // Anticipa fine round se tutti gli attivi hanno risposto
-  const activePlayers = await prisma.player.count({ where: { gameId, eliminated: false } });
-  const answeredCount = await prisma.playerAnswer.count({ where: { gameQuestionId: currentGQ.id } });
-  if (answeredCount >= activePlayers) {
-    await handleQuestionEnd(gameId, currentGQ.id, currentGQ.question.id, questionType);
+  if (turnCfg.turnBased) {
+    // Model B (passOnWrong) attivo solo per i tipi auto-verificati: serve sapere
+    // subito se è corretta per decidere se passare. Per i tipi a giudizio host
+    // ricade sul Model A (un rispondente per domanda, poi giudizio).
+    const relay = turnCfg.passOnWrong && meta.autoCheck !== null;
+    if (!relay || isCorrect) {
+      // Model A, oppure Model B con risposta esatta → chiudi la domanda.
+      await handleQuestionEnd(gameId, currentGQ.id, currentGQ.question.id, questionType);
+    } else {
+      // Model B sbagliata: passa la stessa domanda al successivo, o chiudi se
+      // hanno già provato tutti i giocatori attivi.
+      const attemptsNow = attemptsBefore + 1;
+      if (attemptsNow >= activeOrder.length) {
+        await handleQuestionEnd(gameId, currentGQ.id, currentGQ.question.id, questionType);
+      } else {
+        await passTurn(gameId, currentGQ, game, activeOrder, attemptsNow);
+      }
+    }
+  } else {
+    // FREE_FOR_ALL: anticipa fine round se tutti gli attivi hanno risposto.
+    const activePlayers = await prisma.player.count({ where: { gameId, eliminated: false } });
+    const answeredCount = await prisma.playerAnswer.count({ where: { gameQuestionId: currentGQ.id } });
+    if (answeredCount >= activePlayers) {
+      await handleQuestionEnd(gameId, currentGQ.id, currentGQ.question.id, questionType);
+    }
   }
 
   return NextResponse.json({ ok: true, isCorrect, pointsEarned: points });

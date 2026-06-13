@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { loadDuelStateFromDB } from "@/lib/duel-state";
 import { getTypeLabel } from "@/lib/questionTypes";
+import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId } from "@/lib/turn";
 import type {
   GameStateSnapshot,
   PlayerInfo,
@@ -337,6 +338,16 @@ export async function buildGameStateSnapshotFromDB(
     };
     snapshot.currentQuestion = questionPayload;
     snapshot.remainingTime = remaining;
+
+    // Modalità a turni: comunica chi è di turno così i rientri (rejoin) e l'host
+    // sanno chi può rispondere. attempts = risposte già date sulla domanda corrente.
+    if (resolveTurnConfig(game).turnBased) {
+      const activeOrder = parseActiveTurnOrder(game.turnOrder, game.players);
+      const attempts = await prisma.playerAnswer.count({ where: { gameQuestionId: currentGq.id } });
+      const turnId = turnPlayerId(activeOrder, game.currentIndex, attempts);
+      questionPayload.turnPlayerId = turnId;
+      questionPayload.turnPlayerNickname = game.players.find((p) => p.id === turnId)?.nickname ?? null;
+    }
 
     if (playerId) {
       const existing = await prisma.playerAnswer.findUnique({

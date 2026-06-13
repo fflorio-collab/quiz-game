@@ -37,6 +37,9 @@ export default function HostLobbyPage() {
   const [remaining, setRemaining] = useState(0);
   const [reveal, setReveal] = useState<RevealData | null>(null);
   const [answeredCount, setAnsweredCount] = useState(0);
+  // Modalità a turni: chi è di turno sulla domanda corrente (null = FREE_FOR_ALL).
+  const [turnPlayerId, setTurnPlayerId] = useState<string | null>(null);
+  const [turnPlayerNickname, setTurnPlayerNickname] = useState<string | null>(null);
   const [finalRanking, setFinalRanking] = useState<PlayerInfo[]>([]);
   const [judgeData, setJudgeData] = useState<JudgeAnswersData | null>(null);
   const [judgments, setJudgments] = useState<Record<string, boolean>>({});
@@ -166,6 +169,8 @@ export default function HostLobbyPage() {
           setPhase("REVEAL");
         } else if (s.currentQuestion) {
           setQuestion(s.currentQuestion);
+          setTurnPlayerId(s.currentQuestion.turnPlayerId ?? null);
+          setTurnPlayerNickname(s.currentQuestion.turnPlayerNickname ?? null);
           setRemaining(s.remainingTime ?? s.currentQuestion.timeLimit);
           setReveal(null);
           setJudgeData(null);
@@ -196,6 +201,8 @@ export default function HostLobbyPage() {
     };
     const onGameQuestion = (q: QuestionData) => {
       setQuestion(q);
+      setTurnPlayerId(q.turnPlayerId ?? null);
+      setTurnPlayerNickname(q.turnPlayerNickname ?? null);
       setReveal(null);
       setJudgeData(null);
       setJudgments({});
@@ -205,6 +212,12 @@ export default function HostLobbyPage() {
       setLocalCorrectAnswer("");
       setCategoryGrid(null);
       setPhase("QUESTION");
+    };
+    // Modalità a turni: cambio del giocatore di turno (staffetta passOnWrong).
+    const onTurn = (data: { turnPlayerId: string | null; turnPlayerNickname: string | null; remainingTime: number }) => {
+      setTurnPlayerId(data.turnPlayerId);
+      setTurnPlayerNickname(data.turnPlayerNickname);
+      if (data.remainingTime > 0) setRemaining(data.remainingTime);
     };
     const onJeopardyGrid = (data: JeopardyGridData) => {
       setJeopardyGrid(data);
@@ -245,6 +258,7 @@ export default function HostLobbyPage() {
     gameChannel.bind("lobby:updated", onLobbyUpdated);
     gameChannel.bind("lobby:started", onLobbyStarted);
     gameChannel.bind("game:question", onGameQuestion);
+    gameChannel.bind("game:turn", onTurn);
     gameChannel.bind("game:jeopardy-grid", onJeopardyGrid);
     gameChannel.bind("game:category-grid", onCategoryGrid);
     gameChannel.bind("game:answer-received", onAnswerReceived);
@@ -260,6 +274,7 @@ export default function HostLobbyPage() {
       gameChannel.unbind("lobby:updated", onLobbyUpdated);
       gameChannel.unbind("lobby:started", onLobbyStarted);
       gameChannel.unbind("game:question", onGameQuestion);
+      gameChannel.unbind("game:turn", onTurn);
       gameChannel.unbind("game:jeopardy-grid", onJeopardyGrid);
       gameChannel.unbind("game:category-grid", onCategoryGrid);
       gameChannel.unbind("game:answer-received", onAnswerReceived);
@@ -989,6 +1004,19 @@ export default function HostLobbyPage() {
               )}
             </span>
           </div>
+
+          {/* Modalità a turni: evidenzia di chi è il turno */}
+          {turnPlayerId && (
+            <div className="mb-6 p-4 rounded-xl bg-gold/10 ring-2 ring-gold/50 text-center">
+              <span className="text-sm text-muted mr-2">🎯 Tocca a</span>
+              <span className="text-2xl font-bold text-gold">
+                {turnPlayerNickname ?? "—"}
+              </span>
+              <p className="text-xs text-muted mt-1">
+                Solo questo giocatore può rispondere. Gli altri guardano e aspettano.
+              </p>
+            </div>
+          )}
 
           {question.timeLimit > 0 && (
             <div className="relative h-2 bg-surface rounded-full overflow-hidden mb-8">

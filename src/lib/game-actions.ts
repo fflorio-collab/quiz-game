@@ -6,6 +6,7 @@ import { evaluateBadgeUnlocks } from "@/lib/gamification/badges";
 import { QUESTION_TYPE_META, getTypeLabel } from "@/lib/questionTypes";
 import { broadcastLobby, emitLocalRoundState } from "@/lib/game-broadcasts";
 import { resolveTimeLimit, buildJudgeAnswersData, buildRevealDataFromDb } from "@/lib/game-snapshot";
+import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId } from "@/lib/turn";
 import type { QuestionType } from "@/types/socket";
 
 function shuffle<T>(arr: T[]): T[] {
@@ -132,6 +133,21 @@ export async function sendNextQuestion(gameId: string): Promise<void> {
 
   const effectiveTimeLimit = resolveTimeLimit(game, q.timeLimit);
 
+  // Modalità a turni: chi è di turno su questa (nuova) domanda. attempts=0 perché
+  // nessuno ha ancora risposto. Per FREE_FOR_ALL resta null → comportamento invariato.
+  let turnPlayerIdValue: string | null = null;
+  let turnPlayerNickname: string | null = null;
+  if (resolveTurnConfig(game).turnBased) {
+    const players = await prisma.player.findMany({
+      where: { gameId },
+      orderBy: { joinedAt: "asc" },
+      select: { id: true, nickname: true, eliminated: true, joinedAt: true },
+    });
+    const activeOrder = parseActiveTurnOrder(game.turnOrder, players);
+    turnPlayerIdValue = turnPlayerId(activeOrder, game.currentIndex, 0);
+    turnPlayerNickname = players.find((p) => p.id === turnPlayerIdValue)?.nickname ?? null;
+  }
+
   const questionData = {
     questionId: q.id,
     gameQuestionId: gq.id,
@@ -147,6 +163,8 @@ export async function sendNextQuestion(gameId: string): Promise<void> {
     imageUrl: q.imageUrl ?? null,
     mediaType: q.mediaType ?? null,
     wordTemplate: q.wordTemplate ?? null,
+    turnPlayerId: turnPlayerIdValue,
+    turnPlayerNickname,
   };
 
   await clearRevealDb(gameId);
@@ -189,6 +207,108 @@ export async function handleQuestionEnd(
     await sendAnswersForJudgment(gameId, gameQuestionId, questionId);
   } else {
     await revealAnswer(gameId, gameQuestionId);
+  }
+}
+
+// ─── Modalità a turni ────────────────────────────────────────────────────────
+
+// Staffetta passOnWrong: passa la STESSA domanda al giocatore successivo.
+// Resetta il timer della domanda e notifica tutti col nuovo giocatore di turno.
+export async function passTurn(
+  gameId: string,
+  currentGq: { id: string; question: { timeLimit: number } },
+  game: Parameters<typeof resolveTimeLimit>[0],
+  activeOrder: string[],
+  attemptsNow: number,
+): Promise<void> {
+  const nextId = turnPlayerId(activeOrder, game.currentIndex, attemptsNow);
+  const effLimit = resolveTimeLimit(game, currentGq.question.timeLimit);
+  await prisma.game.update({
+    where: { id: gameId },
+    data: {
+      currentQuestionDeadline:
+        effLimit > 0 ? new Date(Date.now() + effLimit * 1000) : null,
+    },
+  });
+  const nextPlayer = nextId
+    ? await prisma.player.findUnique({ where: { id: nextId }, select: { nickname: true } })
+    : null;
+  await broadcastToGame(gameId, "game:turn", {
+    gameQuestionId: currentGq.id,
+    turnPlayerId: nextId,
+    turnPlayerNickname: nextPlayer?.nickname ?? null,
+    remainingTime: effLimit > 0 ? effLimit : 0,
+  });
+}
+
+// Fine domanda consapevole dei turni, chiamata dal tick alla scadenza del timer.
+// - Model A / FREE_FOR_ALL: il timeout chiude la domanda (come prima).
+// - Model B (passOnWrong + tipo auto-check): il timeout vale come errore del
+//   giocatore di turno → segna [TEMPO SCADUTO] e passa al successivo; se hanno
+//   già provato tutti, chiude la domanda. Claim atomico della deadline per evitare
+//   doppioni tra più tick concorrenti.
+export async function handleTurnDeadline(gameId: string): Promise<void> {
+  const game = await prisma.game.findUnique({
+    where: { id: gameId },
+    include: {
+      gameQuestions: {
+        include: { question: { select: { id: true, type: true, timeLimit: true } } },
+        orderBy: { order: "asc" },
+      },
+    },
+  });
+  if (!game || game.status !== "PLAYING" || !game.currentQuestionDeadline) return;
+  const currentGq = game.gameQuestions[game.currentIndex];
+  if (!currentGq || currentGq.revealedAt || currentGq.awaitingJudgment) return;
+
+  const qType = currentGq.question.type as QuestionType;
+  const meta = QUESTION_TYPE_META[qType];
+  const turnCfg = resolveTurnConfig(game);
+  const relay = turnCfg.turnBased && turnCfg.passOnWrong && meta.autoCheck !== null;
+
+  if (!relay) {
+    await handleQuestionEnd(gameId, currentGq.id, currentGq.question.id, qType);
+    return;
+  }
+
+  // Claim atomico: solo il tick che "vince" la CAS sulla deadline scaduta procede.
+  const claimed = await prisma.game.updateMany({
+    where: { id: gameId, currentQuestionDeadline: game.currentQuestionDeadline },
+    data: { currentQuestionDeadline: null },
+  });
+  if (claimed.count === 0) return;
+
+  const players = await prisma.player.findMany({
+    where: { gameId },
+    orderBy: { joinedAt: "asc" },
+    select: { id: true, eliminated: true, joinedAt: true },
+  });
+  const activeOrder = parseActiveTurnOrder(game.turnOrder, players);
+  const attempts = await prisma.playerAnswer.count({ where: { gameQuestionId: currentGq.id } });
+  const curId = turnPlayerId(activeOrder, game.currentIndex, attempts);
+  if (curId) {
+    try {
+      await prisma.playerAnswer.create({
+        data: {
+          playerId: curId,
+          gameQuestionId: currentGq.id,
+          answerText: "[TEMPO SCADUTO]",
+          timeTaken: 0,
+          isCorrect: false,
+          pointsEarned: 0,
+          judged: true,
+        },
+      });
+      await prisma.player.update({ where: { id: curId }, data: { streak: 0 } });
+    } catch {
+      // race con un submit reale dello stesso player (vincolo unico): ignora.
+    }
+  }
+  const attemptsNow = await prisma.playerAnswer.count({ where: { gameQuestionId: currentGq.id } });
+  if (attemptsNow >= activeOrder.length) {
+    await handleQuestionEnd(gameId, currentGq.id, currentGq.question.id, qType);
+  } else {
+    await passTurn(gameId, currentGq, game, activeOrder, attemptsNow);
   }
 }
 

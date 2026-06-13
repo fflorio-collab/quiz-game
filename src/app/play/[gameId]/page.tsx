@@ -119,6 +119,9 @@ export default function PlayPage() {
   const [myAvatarUrl, setMyAvatarUrl] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>("WAITING");
   const [question, setQuestion] = useState<QuestionData | null>(null);
+  // Modalità a turni: chi è di turno sulla domanda corrente (null = FREE_FOR_ALL).
+  const [turnPlayerId, setTurnPlayerId] = useState<string | null>(null);
+  const [turnPlayerNickname, setTurnPlayerNickname] = useState<string | null>(null);
   const [selectedAnswerId, setSelectedAnswerId] = useState<string | null>(null);
   const [openText, setOpenText] = useState("");
   const [wordBlanks, setWordBlanks] = useState<string[]>([]);
@@ -270,6 +273,8 @@ export default function PlayPage() {
           setPhase("REVEAL");
         } else if (s.currentQuestion) {
           setQuestion(s.currentQuestion);
+          setTurnPlayerId(s.currentQuestion.turnPlayerId ?? null);
+          setTurnPlayerNickname(s.currentQuestion.turnPlayerNickname ?? null);
           setRemaining(s.remainingTime ?? s.currentQuestion.timeLimit);
           setQuestionStartTime(Date.now() - ((s.currentQuestion.timeLimit - (s.remainingTime ?? s.currentQuestion.timeLimit)) * 1000));
           if (s.currentQuestion.questionType === "WORD_COMPLETION" && s.currentQuestion.wordTemplate) {
@@ -297,6 +302,8 @@ export default function PlayPage() {
 
     const onGameQuestion = (q: QuestionData) => {
       setQuestion(q);
+      setTurnPlayerId(q.turnPlayerId ?? null);
+      setTurnPlayerNickname(q.turnPlayerNickname ?? null);
       setSelectedAnswerId(null);
       setOpenText("");
       setReveal(null);
@@ -316,6 +323,24 @@ export default function PlayPage() {
       setQuestion(null);
       setReveal(null);
       setPhase("WAITING");
+    };
+
+    // Modalità a turni: il turno cambia (staffetta passOnWrong sulla stessa domanda).
+    const onTurn = (data: {
+      turnPlayerId: string | null;
+      turnPlayerNickname: string | null;
+      remainingTime: number;
+    }) => {
+      setTurnPlayerId(data.turnPlayerId);
+      setTurnPlayerNickname(data.turnPlayerNickname);
+      if (data.remainingTime > 0) setRemaining(data.remainingTime);
+      // Se ora tocca a me, preparami a rispondere con input puliti.
+      if (data.turnPlayerId === playerId) {
+        setSelectedAnswerId(null);
+        setOpenText("");
+        setQuestionStartTime(Date.now());
+        setPhase("QUESTION");
+      }
     };
 
     const onReveal = (data: RevealData) => {
@@ -374,6 +399,7 @@ export default function PlayPage() {
 
     channel.bind("lobby:started", onLobbyStarted);
     channel.bind("game:question", onGameQuestion);
+    channel.bind("game:turn", onTurn);
     channel.bind("game:jeopardy-grid", onJeopardyGrid);
     channel.bind("game:reveal", onReveal);
     channel.bind("game:leaderboard", onLeaderboard);
@@ -385,6 +411,7 @@ export default function PlayPage() {
     return () => {
       channel.unbind("lobby:started", onLobbyStarted);
       channel.unbind("game:question", onGameQuestion);
+      channel.unbind("game:turn", onTurn);
       channel.unbind("game:jeopardy-grid", onJeopardyGrid);
       channel.unbind("game:reveal", onReveal);
       channel.unbind("game:leaderboard", onLeaderboard);
@@ -403,8 +430,12 @@ export default function PlayPage() {
   }, [phase, question]);
 
 
+  // Modalità a turni: se non è il mio turno non posso rispondere (il server rifiuta comunque).
+  const notMyTurn = !!turnPlayerId && turnPlayerId !== playerId;
+
   // Migration vercel-pusher fase 7.6: POST /api/player/[id]/answer al posto di socket.emit.
   const submitMultipleChoice = (answerId: string) => {
+    if (notMyTurn) return;
     if (!playerId || !question || selectedAnswerId) return;
     setSelectedAnswerId(answerId);
     fetch(`/api/player/${playerId}/answer`, {
@@ -420,6 +451,7 @@ export default function PlayPage() {
   };
 
   const submitTextAnswer = (text: string) => {
+    if (notMyTurn) return;
     if (!playerId || !question || !text.trim()) return;
     fetch(`/api/player/${playerId}/answer`, {
       method: "POST",
@@ -484,6 +516,7 @@ export default function PlayPage() {
 
   // Aiuto Salto: POST /api/player/[id]/answer con skipped:true
   const useSkip = () => {
+    if (notMyTurn) return;
     if (!playerId || !question || skipRemaining <= 0 || selectedAnswerId) return;
     setSkipUsed((n) => n + 1);
     setLifelineAnim("skip");
@@ -783,6 +816,49 @@ export default function PlayPage() {
   }
 
   if (phase === "QUESTION" && question) {
+    // --- MODALITÀ A TURNI: non è il mio turno → guardo e aspetto (read-only) ---
+    if (notMyTurn) {
+      return (
+        <main className="min-h-screen p-4 flex flex-col">
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-sm text-muted">
+              {question.questionNumber} / {question.totalQuestions}
+            </span>
+            <span className="text-2xl font-bold tabular-nums text-accent">
+              {question.timeLimit > 0 ? remaining : "♾️"}
+            </span>
+          </div>
+          <div className="card mb-4 text-center">
+            <p className="text-lg font-semibold">{question.text}</p>
+          </div>
+          {question.imageUrl && (
+            <div className="flex justify-center mb-4">
+              <MediaDisplay imageUrl={question.imageUrl} mediaType={question.mediaType} className="max-h-40" />
+            </div>
+          )}
+          {question.questionType === "MULTIPLE_CHOICE" && question.answers.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+              {question.answers.map((a, i) => (
+                <div key={a.id} className={`answer-tile ${answerColors[i]} opacity-40 pointer-events-none`}>
+                  <span className="font-bold text-2xl mr-3">{String.fromCharCode(65 + i)}</span>
+                  <span>{a.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="mt-auto card border-accent/40 bg-accent/5 text-center animate-fade-in">
+            <div className="text-5xl mb-2 animate-pulse-slow">🔒</div>
+            <p className="font-bold text-lg">
+              Tocca a {turnPlayerNickname ?? "un altro giocatore"}
+            </p>
+            <p className="text-muted text-sm mt-1">
+              Attendi il tuo turno — ora puoi solo guardare.
+            </p>
+          </div>
+        </main>
+      );
+    }
+
     // --- MULTIPLE CHOICE ---
     if (question.questionType === "MULTIPLE_CHOICE") {
       return (

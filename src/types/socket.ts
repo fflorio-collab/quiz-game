@@ -17,6 +17,14 @@ export interface ServerToClientEvents {
   "game:question": (data: QuestionData) => void;
   "game:timer": (data: { remaining: number }) => void;
   "game:answer-received": (data: { playerId: string }) => void;
+  // Modalità a turni: cambia il giocatore di turno sulla domanda corrente
+  // (nuova domanda, oppure staffetta passOnWrong dentro la stessa domanda).
+  "game:turn": (data: {
+    gameQuestionId: string;
+    turnPlayerId: string | null;
+    turnPlayerNickname: string | null;
+    remainingTime: number;
+  }) => void;
   "game:reveal": (data: RevealData) => void;
   "game:leaderboard": (data: { players: PlayerInfo[] }) => void;
   "game:finished": (data: { players: PlayerInfo[] }) => void;
@@ -219,6 +227,9 @@ export interface QuestionData {
   imageUrl?: string | null;       // URL immagine o video allegato
   mediaType?: string | null;      // "image" | "video"
   wordTemplate?: string | null;   // per WORD_COMPLETION
+  // Modalità a turni: chi è di turno su questa domanda. null/undefined = FREE_FOR_ALL.
+  turnPlayerId?: string | null;
+  turnPlayerNickname?: string | null;
 }
 
 export interface RevealData {

@@ -515,18 +515,28 @@ export default function HostPage() {
                     className={`p-3 rounded-xl border-2 text-left transition-all ${playMode === "TURN_BASED" ? "border-accent bg-accent/10 text-white" : "border-border text-muted hover:border-muted"}`}>
                     <div className="text-xl mb-1">🔁</div>
                     <div className="font-medium text-sm">A turno</div>
-                    <div className="text-xs text-muted">Risponde un giocatore alla volta.</div>
+                    <div className="text-xs text-muted">Risponde un giocatore alla volta; gli altri guardano.</div>
                   </button>
                 </div>
                 {playMode === "TURN_BASED" && (
-                  <label className="flex items-center gap-2 mt-3 cursor-pointer">
-                    <input type="checkbox" checked={passOnWrong} onChange={(e) => setPassOnWrong(e.target.checked)}
-                      className="w-4 h-4 accent-accent" />
-                    <span className="text-sm">Se sbaglia, passa al successivo (sulla stessa domanda)</span>
-                  </label>
+                  <div className="mt-3 p-3 rounded-xl border border-border bg-surface/50">
+                    <p className="text-xs font-medium mb-2">Come gira il turno?</p>
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input type="checkbox" checked={passOnWrong} onChange={(e) => setPassOnWrong(e.target.checked)}
+                        className="w-4 h-4 mt-0.5 accent-accent" />
+                      <span className="text-sm">
+                        Se sbaglia, la <b>stessa domanda</b> passa al giocatore successivo
+                        <span className="block text-xs text-muted mt-0.5">
+                          {passOnWrong
+                            ? "La domanda gira finché qualcuno indovina (o han provato tutti), poi si va avanti."
+                            : "Disattivato: una domanda a testa, a rotazione. Risponde uno, si rivela e si passa alla domanda dopo."}
+                        </span>
+                      </span>
+                    </label>
+                  </div>
                 )}
                 <p className="text-xs text-muted mt-2">
-                  L&apos;ordine dei turni viene generato a caso al via partita; potrai modificarlo prima di iniziare.
+                  L&apos;ordine dei turni viene generato a caso al via partita.
                 </p>
               </div>
             )}

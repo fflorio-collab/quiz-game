@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { handleQuestionEnd } from "@/lib/game-actions";
+import { handleTurnDeadline } from "@/lib/game-actions";
 import { loadDuelStateFromDB } from "@/lib/duel-state";
-import type { QuestionType } from "@/types/socket";
 
 // Migrazione vercel-pusher fase 8.
 // Endpoint di polling: il client lo chiama periodicamente per leggere i timer
@@ -10,21 +9,14 @@ import type { QuestionType } from "@/types/socket";
 // domanda quando il deadline scade. Sostituisce il setInterval del socket
 // server (che su Vercel serverless non può girare).
 //
-// Idempotente: handleQuestionEnd usa il lock revealInProgress (updateMany CAS),
-// quindi chiamate concorrenti da più client convergono su un singolo trigger.
+// Idempotente: handleTurnDeadline usa lock/CAS interni (revealInProgress per la
+// fine domanda, CAS sulla deadline per la staffetta a turni), quindi chiamate
+// concorrenti da più client convergono su un singolo trigger.
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: gameId } = await params;
 
-  const game = await prisma.game.findUnique({
-    where: { id: gameId },
-    include: {
-      gameQuestions: {
-        include: { question: { select: { id: true, type: true } } },
-        orderBy: { order: "asc" },
-      },
-    },
-  });
+  const game = await prisma.game.findUnique({ where: { id: gameId } });
   if (!game) return NextResponse.json({ error: "Partita non trovata" }, { status: 404 });
 
   const now = Date.now();
@@ -39,18 +31,13 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   }
 
   // Trigger automatico fine domanda se scaduto e in stato PLAYING (no judging/reveal).
+  // handleTurnDeadline è consapevole della modalità a turni: in Model B il timeout
+  // passa al giocatore successivo invece di chiudere la domanda. Negli altri casi
+  // chiude come prima. Idempotente (lock/CAS interni) → safe tra tick concorrenti.
   if (questionDeadlineExpired && game.status === "PLAYING") {
-    const currentGq = game.gameQuestions[game.currentIndex];
-    if (currentGq && !currentGq.awaitingJudgment && !currentGq.revealedAt) {
-      await handleQuestionEnd(
-        gameId,
-        currentGq.id,
-        currentGq.question.id,
-        currentGq.question.type as QuestionType,
-      );
-      // L'evento Pusher (game:reveal o game:judge-answers) viene già emesso
-      // da handleQuestionEnd → i client si aggiornano da soli.
-    }
+    await handleTurnDeadline(gameId);
+    // L'evento Pusher (game:reveal / game:judge-answers / game:turn) viene già
+    // emesso dalla funzione → i client si aggiornano da soli.
   }
 
   let speedrunRemaining: number | null = null;
