@@ -347,6 +347,30 @@ export const QUESTION_TYPE_META: Record<QuestionType, QuestionTypeMeta> = {
 export const QUESTION_TYPE_LIST: QuestionTypeMeta[] =
   QUESTION_TYPES.map((t) => QUESTION_TYPE_META[t]);
 
+// ── Modalità attive nei PICKER di scelta ──────────────────────────────────────
+// Snellita "friendly": nei punti dove host/admin SCELGONO una modalità mostriamo
+// solo quelle attive. Disattivare un tipo lo NASCONDE soltanto da quei picker
+// (creazione partita, builder torneo, editor domande admin); il codice di gioco,
+// le validazioni e le domande/partite GIÀ esistenti di quel tipo continuano a
+// funzionare. Per riattivarne una basta toglierla da questo set.
+export const DISABLED_QUESTION_TYPES: ReadonlySet<QuestionType> = new Set<QuestionType>([
+  "WORD_COMPLETION",
+  "REACTION_CHAIN",
+  "CLUE_REVEAL",
+  "GHIGLIOTTINA",
+  "ONLY_CONNECT",
+]);
+
+export function isTypeEnabled(type: QuestionType): boolean {
+  return !DISABLED_QUESTION_TYPES.has(type);
+}
+
+// Sottoinsieme di QUESTION_TYPE_LIST da usare SOLO nei picker di scelta modalità.
+// NON usarlo per filtri/elenchi che mostrano domande esistenti (lì serve la lista
+// completa, altrimenti le domande dei tipi nascosti diventano ingestibili).
+export const ENABLED_QUESTION_TYPE_LIST: QuestionTypeMeta[] =
+  QUESTION_TYPE_LIST.filter((m) => isTypeEnabled(m.type));
+
 export function isQuestionType(value: unknown): value is QuestionType {
   return typeof value === "string" && (QUESTION_TYPES as readonly string[]).includes(value);
 }

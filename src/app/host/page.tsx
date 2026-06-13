@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { QuestionType, DifficultyFilter, PlayMode } from "@/types/socket";
-import { QUESTION_TYPE_LIST, QUESTION_TYPE_META } from "@/lib/questionTypes";
+import { QUESTION_TYPE_META, ENABLED_QUESTION_TYPE_LIST } from "@/lib/questionTypes";
 import {
   type RoundConfig,
   TOURNAMENT_MIN_ROUNDS,
@@ -312,7 +312,7 @@ export default function HostPage() {
               <div>
                 <label className="block text-sm font-medium mb-2">Modalità di gioco</label>
                 <div className="grid grid-cols-2 gap-2">
-                  {QUESTION_TYPE_LIST.map((m) => {
+                  {ENABLED_QUESTION_TYPE_LIST.map((m) => {
                     const empty = isTypeEmpty(m.type);
                     const selected = rounds[0]?.type === m.type;
                     return (
@@ -629,8 +629,8 @@ function RoundEditor({
   const manualSel = round.manualQuestionIds ?? [];
   const manualComplete = manualSel.length === totalQuestions;
 
-  // Tipi disponibili per cambiare modalità del round
-  const availableTypes = useMemo(() => QUESTION_TYPE_LIST.filter((m) => (countsByType[m.type] ?? 0) > 0), [countsByType]);
+  // Tipi disponibili per cambiare modalità del round (solo modalità attive con domande)
+  const availableTypes = useMemo(() => ENABLED_QUESTION_TYPE_LIST.filter((m) => (countsByType[m.type] ?? 0) > 0), [countsByType]);
 
   return (
     <div className="p-2 rounded-lg bg-accent/10 border-2 border-accent/40 space-y-2">

@@ -155,6 +155,72 @@ const WORD: { cat: keyof typeof CATS; text: string; word: string; template: stri
   { cat: "cinema", text: "Regista di Pulp Fiction e Kill Bill",                              word: "TARANTINO",  template: "T_R_NT_NO",     difficulty: "MEDIUM" },
 ];
 
+// ---------- WORD_COMPLETION — seconda batch (50) ----------
+// Altre 50 parole da comporre, nessuna in comune con l'array WORD sopra.
+const WORD2: { cat: keyof typeof CATS; text: string; word: string; template: string; difficulty: Diff }[] = [
+  // Storia (9)
+  { cat: "storia", text: "Imperatore romano che legalizzò il cristianesimo",                 word: "COSTANTINO",   template: "C_ST_NT_NO",     difficulty: "HARD" },
+  { cat: "storia", text: "Imperatore francese esiliato all'isola d'Elba",                    word: "NAPOLEONE",    template: "N_P_L_O_E",      difficulty: "EASY" },
+  { cat: "storia", text: "Navigatore che raggiunse l'America nel 1492",                       word: "COLOMBO",      template: "C_L_M_O",        difficulty: "EASY" },
+  { cat: "storia", text: "Periodo storico tra l'età antica e quella moderna",                 word: "MEDIOEVO",     template: "M_D_O_VO",       difficulty: "EASY" },
+  { cat: "storia", text: "Dittatore romano pugnalato alle Idi di marzo",                      word: "CESARE",       template: "C_S_R_",         difficulty: "EASY" },
+  { cat: "storia", text: "Spedizioni militari cristiane verso la Terra Santa",                word: "CROCIATE",     template: "CR_C_AT_",       difficulty: "MEDIUM" },
+  { cat: "storia", text: "Periodo di rinnovamento artistico nato in Italia nel '400",         word: "RINASCIMENTO", template: "R_N_SC_M_NTO",   difficulty: "MEDIUM" },
+  { cat: "storia", text: "Eroe dei due mondi, guidò la spedizione dei Mille",                 word: "GARIBALDI",    template: "G_R_B_LD_",      difficulty: "EASY" },
+  { cat: "storia", text: "Transatlantico affondato nel 1912 dopo aver urtato un iceberg",     word: "TITANIC",      template: "T_T_N_C",        difficulty: "MEDIUM" },
+
+  // Geografia (9)
+  { cat: "geo", text: "Capitale del Regno Unito",                                             word: "LONDRA",       template: "L_N_R_",         difficulty: "EASY" },
+  { cat: "geo", text: "Capitale del Portogallo",                                              word: "LISBONA",      template: "L_SB_N_",        difficulty: "MEDIUM" },
+  { cat: "geo", text: "La montagna più alta del mondo",                                       word: "EVEREST",      template: "_V_R_ST",        difficulty: "EASY" },
+  { cat: "geo", text: "Fiume che attraversa l'Egitto",                                        word: "NILO",         template: "N_L_",           difficulty: "EASY" },
+  { cat: "geo", text: "Nazione asiatica detta 'Il Sol Levante'",                              word: "GIAPPONE",     template: "G_AP_ON_",       difficulty: "EASY" },
+  { cat: "geo", text: "Continente e nazione dell'emisfero australe",                          word: "AUSTRALIA",    template: "A_STR_L_A",      difficulty: "EASY" },
+  { cat: "geo", text: "Città italiana costruita sull'acqua, famosa per i canali",             word: "VENEZIA",      template: "V_N_Z_A",        difficulty: "EASY" },
+  { cat: "geo", text: "Il più grande deserto caldo del mondo",                                word: "SAHARA",       template: "S_H_R_",         difficulty: "MEDIUM" },
+  { cat: "geo", text: "Nazione iberica con capitale Lisbona",                                 word: "PORTOGALLO",   template: "P_RT_G_LL_",     difficulty: "MEDIUM" },
+
+  // Scienza (9)
+  { cat: "scienza", text: "Il pianeta più grande del sistema solare",                         word: "GIOVE",        template: "G_OV_",          difficulty: "EASY" },
+  { cat: "scienza", text: "Il pianeta più lontano dal Sole",                                  word: "NETTUNO",      template: "N_TT_N_",        difficulty: "MEDIUM" },
+  { cat: "scienza", text: "La più piccola parte di un elemento chimico",                      word: "ATOMO",        template: "_T_M_",          difficulty: "EASY" },
+  { cat: "scienza", text: "Elemento alla base della vita, simbolo C",                         word: "CARBONIO",     template: "C_RB_N_O",       difficulty: "MEDIUM" },
+  { cat: "scienza", text: "Cellula del sistema nervoso",                                      word: "NEURONE",      template: "N_UR_N_",        difficulty: "MEDIUM" },
+  { cat: "scienza", text: "Forza che attira i corpi verso la Terra",                          word: "GRAVITA",      template: "GR_V_T_",        difficulty: "EASY" },
+  { cat: "scienza", text: "Organo della respirazione, ne abbiamo due",                        word: "POLMONE",      template: "P_LM_N_",        difficulty: "EASY" },
+  { cat: "scienza", text: "Spazio percorso diviso il tempo impiegato",                        word: "VELOCITA",     template: "V_L_C_T_",       difficulty: "MEDIUM" },
+  { cat: "scienza", text: "Scienziato pisano che perfezionò il telescopio",                   word: "GALILEO",      template: "G_L_L_O",        difficulty: "MEDIUM" },
+
+  // Arte e Cultura (8)
+  { cat: "arte", text: "Scultore del David e autore della Cappella Sistina",                  word: "MICHELANGELO", template: "M_CH_L_NG_LO",   difficulty: "MEDIUM" },
+  { cat: "arte", text: "Pittore del chiaroscuro, autore della 'Vocazione di San Matteo'",     word: "CARAVAGGIO",   template: "C_R_V_GG_O",     difficulty: "HARD" },
+  { cat: "arte", text: "Pittore fiorentino della 'Nascita di Venere'",                        word: "BOTTICELLI",   template: "B_TT_C_LL_",     difficulty: "HARD" },
+  { cat: "arte", text: "Drammaturgo siciliano, premio Nobel per la letteratura",              word: "PIRANDELLO",   template: "P_R_ND_LL_",     difficulty: "HARD" },
+  { cat: "arte", text: "Poeta del 'Canzoniere', amò Laura",                                   word: "PETRARCA",     template: "P_TR_RC_",       difficulty: "MEDIUM" },
+  { cat: "arte", text: "Compositore polacco celebre per i notturni al pianoforte",            word: "CHOPIN",       template: "CH_P_N",         difficulty: "MEDIUM" },
+  { cat: "arte", text: "Scultore francese de 'Il Pensatore'",                                 word: "RODIN",        template: "R_D_N",          difficulty: "HARD" },
+  { cat: "arte", text: "Pittore olandese de 'La ragazza con l'orecchino di perla'",           word: "VERMEER",      template: "V_RME_R",        difficulty: "HARD" },
+
+  // Sport (8)
+  { cat: "sport", text: "Sport con racchetta e pallina gialla",                               word: "TENNIS",       template: "T_NN_S",         difficulty: "EASY" },
+  { cat: "sport", text: "Leggenda argentina del calcio, gol di mano nel 1986",                word: "MARADONA",     template: "M_R_D_N_",       difficulty: "EASY" },
+  { cat: "sport", text: "Campione svizzero di tennis con 20 titoli del Grande Slam",          word: "FEDERER",      template: "F_D_R_R",        difficulty: "MEDIUM" },
+  { cat: "sport", text: "Sport olimpico con fioretto, spada e sciabola",                       word: "SCHERMA",      template: "SCH_RM_",        difficulty: "MEDIUM" },
+  { cat: "sport", text: "Sport su due ruote, il Giro d'Italia",                               word: "CICLISMO",     template: "C_CL_SM_",       difficulty: "EASY" },
+  { cat: "sport", text: "Corsa di 42 km nata da un'antica leggenda greca",                    word: "MARATONA",     template: "M_R_T_N_",       difficulty: "MEDIUM" },
+  { cat: "sport", text: "Sport invernale praticato sulla neve con due assi",                  word: "SCI",          template: "S_I",            difficulty: "EASY" },
+  { cat: "sport", text: "Sport di squadra con rete alta e palla colpita con le mani",         word: "PALLAVOLO",    template: "P_LL_V_L_",      difficulty: "EASY" },
+
+  // Cinema (7)
+  { cat: "cinema", text: "Regista di 'Inception' e 'Interstellar'",                          word: "NOLAN",        template: "N_L_N",          difficulty: "MEDIUM" },
+  { cat: "cinema", text: "Pugile di Filadelfia interpretato da Sylvester Stallone",          word: "ROCKY",        template: "R_C_Y",          difficulty: "MEDIUM" },
+  { cat: "cinema", text: "Film sci-fi con Neo e la scelta tra pillola rossa e blu",          word: "MATRIX",       template: "M_TR_X",         difficulty: "EASY" },
+  { cat: "cinema", text: "Cartone Disney con il genio della lampada",                        word: "ALADDIN",      template: "_L_DD_N",        difficulty: "EASY" },
+  { cat: "cinema", text: "Film con Russell Crowe nei panni di Massimo Decimo Meridio",       word: "GLADIATORE",   template: "GL_D_AT_R_",     difficulty: "EASY" },
+  { cat: "cinema", text: "Film di James Cameron ambientato sul pianeta Pandora",             word: "AVATAR",       template: "_V_T_R",         difficulty: "EASY" },
+  { cat: "cinema", text: "Leoncino protagonista de 'Il Re Leone'",                           word: "SIMBA",        template: "S_MB_",          difficulty: "EASY" },
+];
+
 // ---------- IMAGE_GUESS (50) ----------
 // imageUrl usa URL Wikimedia Commons Special:FilePath che redirige all'immagine corrente.
 // openAnswer è il nome del luogo/opera (riferimento per l'admin).
@@ -287,6 +353,29 @@ async function main() {
     createdWord++;
   }
   console.log(`🔡 WORD_COMPLETION — create ${createdWord}, saltate ${skipWord} (${WORD.length} totali)`);
+
+  // --- WORD_COMPLETION (seconda batch) ---
+  let createdWord2 = 0, skipWord2 = 0;
+  for (const q of WORD2) {
+    const categoryId = catMap.get(q.cat)!;
+    const exists = await prisma.question.findFirst({
+      where: { categoryId, text: q.text, type: "WORD_COMPLETION" },
+    });
+    if (exists) { skipWord2++; continue; }
+    await prisma.question.create({
+      data: {
+        text: q.text,
+        type: "WORD_COMPLETION",
+        difficulty: q.difficulty,
+        timeLimit: 25,
+        categoryId,
+        wordTemplate: q.template,
+        answers: { create: [{ text: q.word, isCorrect: true, order: 0 }] },
+      },
+    });
+    createdWord2++;
+  }
+  console.log(`🔡 WORD_COMPLETION 2 — create ${createdWord2}, saltate ${skipWord2} (${WORD2.length} totali)`);
 
   // --- IMAGE_GUESS ---
   for (const q of IMAGE) {

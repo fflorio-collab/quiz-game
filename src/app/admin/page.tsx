@@ -7,7 +7,9 @@ import YouTubeEmbed, { extractYouTubeId } from "@/components/YouTubeEmbed";
 import MediaDisplay from "@/components/MediaDisplay";
 import {
   QUESTION_TYPE_LIST,
+  ENABLED_QUESTION_TYPE_LIST,
   QUESTION_TYPE_META,
+  isTypeEnabled,
   isQuestionType,
   type QuestionType,
 } from "@/lib/questionTypes";
@@ -630,7 +632,12 @@ export default function AdminPage() {
                   <div>
                     <label className="block text-sm font-medium mb-2">Tipo domanda</label>
                     <div className="grid grid-cols-2 gap-2">
-                      {QUESTION_TYPE_LIST.map((meta) => (
+                      {/* Solo modalità attive; ma se stai MODIFICANDO una domanda di un
+                          tipo nascosto, mostriamo anche quel tipo così resta evidenziato. */}
+                      {(isTypeEnabled(qType)
+                        ? ENABLED_QUESTION_TYPE_LIST
+                        : [...ENABLED_QUESTION_TYPE_LIST, QUESTION_TYPE_META[qType]]
+                      ).map((meta) => (
                         <button key={meta.type} type="button"
                           onClick={() => { setQType(meta.type); setQTimeLimit(meta.defaultTimeLimit); resetQForm(); setQType(meta.type); }}
                           className={`px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors text-left ${qType === meta.type ? "border-accent bg-accent/20 text-white" : "border-border text-muted hover:border-white"}`}>
