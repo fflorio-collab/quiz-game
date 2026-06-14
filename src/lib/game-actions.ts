@@ -141,6 +141,11 @@ export async function sendNextQuestion(gameId: string): Promise<void> {
   // Modalità a turni: chi è di turno su questa (nuova) domanda. attempts=0 perché
   // nessuno ha ancora risposto. Per FREE_FOR_ALL resta null → comportamento invariato.
   const turnBased = resolveTurnConfig(game).turnBased;
+  // Numero di sequenza progressivo delle domande estratte (clean 0,1,2… anche con
+  // "Scegli categoria"/Jeopardy dove currentIndex salta). La domanda corrente è già
+  // marcata askedAt nel DB (riga sopra) ma non nella lista in memoria (caricata prima)
+  // → +1 la include. Usato sia per il numero domanda mostrato sia per la rotazione turni.
+  const askedSeq = questionSeq(game.gameQuestions.filter((g) => g.askedAt).length + 1);
   let turnPlayerIdValue: string | null = null;
   let turnPlayerNickname: string | null = null;
   if (turnBased) {
@@ -150,11 +155,7 @@ export async function sendNextQuestion(gameId: string): Promise<void> {
       select: { id: true, nickname: true, eliminated: true, joinedAt: true },
     });
     const activeOrder = parseActiveTurnOrder(game.turnOrder, players);
-    // Rotazione sul numero di domande estratte (clean 0,1,2… anche con Scegli
-    // categoria / Jeopardy dove currentIndex salta). La domanda corrente è già
-    // marcata askedAt nel DB ma non nella lista in memoria → +1. seq = askedCount-1.
-    const askedCount = game.gameQuestions.filter((g) => g.askedAt).length + 1;
-    turnPlayerIdValue = turnPlayerId(activeOrder, questionSeq(askedCount), 0);
+    turnPlayerIdValue = turnPlayerId(activeOrder, askedSeq, 0);
     turnPlayerNickname = players.find((p) => p.id === turnPlayerIdValue)?.nickname ?? null;
   }
 
@@ -165,7 +166,7 @@ export async function sendNextQuestion(gameId: string): Promise<void> {
     questionType: q.type as QuestionType,
     answers: shuffledAnswers.map((a) => ({ id: a.id, text: a.text })),
     timeLimit: effectiveTimeLimit,
-    questionNumber: game.currentIndex + 1,
+    questionNumber: askedSeq + 1,
     totalQuestions: game.totalQuestions,
     category: q.category
       ? { name: q.category.name, icon: q.category.icon, color: q.category.color }

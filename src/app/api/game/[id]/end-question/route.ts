@@ -15,12 +15,18 @@ import type { QuestionType } from "@/types/socket";
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: gameId } = await params;
 
-  // Trova la GameQuestion "current" — l'ultima con askedAt!=null, revealedAt==null,
-  // awaitingJudgment==false. Se non c'è, no-op (potrebbe essere già stato gestito
-  // da un'altra chiamata concorrente).
+  // La domanda "current" è quella con order === currentIndex (ciò che il player vede),
+  // NON la più alta tra le estratte-non-rivelate: in "Scegli categoria"/Jeopardy
+  // currentIndex salta e order-desc rivelerebbe un'altra domanda (risposta sbagliata).
+  const game = await prisma.game.findUnique({
+    where: { id: gameId },
+    select: { currentIndex: true },
+  });
+  if (!game) {
+    return NextResponse.json({ ok: true, noop: true });
+  }
   const current = await prisma.gameQuestion.findFirst({
-    where: { gameId, askedAt: { not: null }, revealedAt: null, awaitingJudgment: false },
-    orderBy: { order: "desc" },
+    where: { gameId, order: game.currentIndex, askedAt: { not: null }, revealedAt: null, awaitingJudgment: false },
     include: { question: { select: { id: true, type: true } } },
   });
   if (!current) {

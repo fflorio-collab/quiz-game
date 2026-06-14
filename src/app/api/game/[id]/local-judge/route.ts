@@ -17,19 +17,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const isCorrect = !!body?.isCorrect;
   if (!playerId) return NextResponse.json({ error: "playerId richiesto" }, { status: 400 });
 
-  // GameQuestion attuale: latest con askedAt!=null, revealedAt==null (anche awaitingJudgment
-  // può essere true; in presentatore il flusso è diverso)
-  const current = await prisma.gameQuestion.findFirst({
-    where: { gameId, askedAt: { not: null }, revealedAt: null },
-    orderBy: { order: "desc" },
-    include: { question: true },
-  });
-  if (!current) return NextResponse.json({ error: "Nessuna domanda attiva" }, { status: 404 });
-
   const game = await prisma.game.findUnique({ where: { id: gameId } });
   if (!game || !game.localPartyMode || game.status !== "PLAYING") {
     return NextResponse.json({ error: "Non in modalità presentatore o partita non attiva" }, { status: 400 });
   }
+
+  // Domanda corrente = order === currentIndex (quella mostrata). order-desc attaccava
+  // il giudizio a un'altra domanda quando currentIndex salta ("Scegli categoria").
+  const current = await prisma.gameQuestion.findFirst({
+    where: { gameId, order: game.currentIndex, askedAt: { not: null }, revealedAt: null },
+    include: { question: true },
+  });
+  if (!current) return NextResponse.json({ error: "Nessuna domanda attiva" }, { status: 404 });
   const player = await prisma.player.findUnique({ where: { id: playerId } });
   if (!player || player.gameId !== gameId || player.eliminated) {
     return NextResponse.json({ error: "Player non valido" }, { status: 400 });

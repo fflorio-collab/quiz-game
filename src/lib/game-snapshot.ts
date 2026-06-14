@@ -91,10 +91,11 @@ async function findActiveRevealDb(gameId: string) {
 
 // La "domanda attiva" è l'ultima GameQuestion con askedAt!=null, revealedAt==null,
 // awaitingJudgment==false. (Se in reveal o in judging, lo gestiamo in rami separati.)
-async function findCurrentQuestionDb(gameId: string) {
+async function findCurrentQuestionDb(gameId: string, currentIndex: number) {
+  // order === currentIndex = la domanda effettivamente servita (robusto ai salti di
+  // currentIndex in "Scegli categoria"/Jeopardy). (gameId, order) individua una sola riga.
   return prisma.gameQuestion.findFirst({
-    where: { gameId, askedAt: { not: null }, revealedAt: null, awaitingJudgment: false },
-    orderBy: { order: "desc" },
+    where: { gameId, order: currentIndex, askedAt: { not: null }, revealedAt: null, awaitingJudgment: false },
     include: { question: { include: { answers: true, category: true } } },
   });
 }
@@ -305,7 +306,7 @@ export async function buildGameStateSnapshotFromDB(
   const [awaitingJudgment, activeReveal, currentGq] = await Promise.all([
     findAwaitingJudgmentDb(gameId),
     findActiveRevealDb(gameId),
-    findCurrentQuestionDb(gameId),
+    findCurrentQuestionDb(gameId, game.currentIndex),
   ]);
 
   if (game.jeopardyMode && !currentGq && !activeReveal && !awaitingJudgment) {
@@ -336,6 +337,9 @@ export async function buildGameStateSnapshotFromDB(
     const askedAtMs = currentGq.askedAt?.getTime() ?? Date.now();
     const elapsed = (Date.now() - askedAtMs) / 1000;
     const remaining = timeLimit <= 0 ? 0 : Math.max(0, Math.ceil(timeLimit - elapsed));
+    // Numero di sequenza progressivo (1,2,3…), robusto a currentIndex che salta
+    // ("Scegli categoria"/Jeopardy). Riusato sotto anche per la rotazione turni.
+    const askedCount = await prisma.gameQuestion.count({ where: { gameId, askedAt: { not: null } } });
 
     const questionPayload: QuestionData = {
       questionId: q.id,
@@ -345,7 +349,7 @@ export async function buildGameStateSnapshotFromDB(
       // Ordine answer letto da DB (vedi nota in cima al file).
       answers: q.answers.map((a) => ({ id: a.id, text: a.text, order: a.order })),
       timeLimit,
-      questionNumber: currentGq.order + 1,
+      questionNumber: questionSeq(askedCount) + 1,
       totalQuestions: game.totalQuestions,
       category: q.category ? { name: q.category.name, icon: q.category.icon, color: q.category.color } : undefined,
       imageUrl: q.imageUrl ?? null,
@@ -360,8 +364,7 @@ export async function buildGameStateSnapshotFromDB(
     if (resolveTurnConfig(game).turnBased) {
       const activeOrder = parseActiveTurnOrder(game.turnOrder, game.players);
       const attempts = await prisma.playerAnswer.count({ where: { gameQuestionId: currentGq.id } });
-      // Rotazione sul numero di domande estratte (robusta a currentIndex che salta).
-      const askedCount = await prisma.gameQuestion.count({ where: { gameId, askedAt: { not: null } } });
+      // askedCount calcolato sopra: rotazione sul numero di domande estratte (robusta ai salti).
       const turnId = turnPlayerId(activeOrder, questionSeq(askedCount), attempts);
       questionPayload.turnPlayerId = turnId;
       questionPayload.turnPlayerNickname = game.players.find((p) => p.id === turnId)?.nickname ?? null;

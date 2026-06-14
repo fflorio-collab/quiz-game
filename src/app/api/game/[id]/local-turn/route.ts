@@ -32,8 +32,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // L'API route non ha accesso alla Map in-memory currentQuestionByGame; recuperiamo dal DB
   // l'ultima GameQuestion non ancora rivelata.
   const currentGq = await prisma.gameQuestion.findFirst({
-    where: { gameId, askedAt: { not: null }, revealedAt: null },
-    orderBy: { order: "desc" },
+    where: { gameId, order: game.currentIndex, askedAt: { not: null }, revealedAt: null },
   });
   if (currentGq) await emitLocalRoundState(gameId, currentGq.id);
 
