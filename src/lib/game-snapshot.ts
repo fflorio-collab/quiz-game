@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { loadDuelStateFromDB } from "@/lib/duel-state";
 import { getTypeLabel } from "@/lib/questionTypes";
-import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId } from "@/lib/turn";
+import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId, resolveRoundLayout, questionSeq, currentRoundBounds } from "@/lib/turn";
 import type {
   GameStateSnapshot,
   PlayerInfo,
@@ -138,17 +138,27 @@ export async function buildRevealDataFromDb(gameQuestionId: string): Promise<Rev
   const questionType = gq.question.type as QuestionType;
 
   let nextRound: RevealData["nextRound"];
-  if (gq.game.tournamentModes) {
-    const modes = gq.game.tournamentModes.split(",") as QuestionType[];
-    const next = gq.game.gameQuestions[gq.game.currentIndex];
-    if (next && next.question.type !== questionType) {
-      const nextModeType = next.question.type as QuestionType;
-      nextRound = {
-        modeType: nextModeType,
-        modeLabel: getTypeLabel(nextModeType),
-        roundNumber: modes.indexOf(nextModeType) + 1,
-        totalRounds: modes.length,
-      };
+  {
+    const layout = resolveRoundLayout(gq.game);
+    if (layout && layout.roundCount > 1) {
+      const { roundTypes, roundCount, perRound } = layout;
+      const roundOfQuestion = Math.min(roundCount - 1, Math.floor(gq.order / perRound));
+      const lo = roundOfQuestion * perRound;
+      const hi = (roundOfQuestion + 1) * perRound; // esclusivo
+      // Round appena giocato completato? (gq stesso ha già askedAt!=null) → confine round.
+      // Robusto a currentIndex che salta (Scegli categoria) e a round dello stesso tipo.
+      const roundComplete = gq.game.gameQuestions
+        .filter((g) => g.order >= lo && g.order < hi)
+        .every((g) => g.askedAt != null);
+      if (roundComplete && roundOfQuestion < roundCount - 1) {
+        const nextModeType = roundTypes[roundOfQuestion + 1];
+        nextRound = {
+          modeType: nextModeType,
+          modeLabel: getTypeLabel(nextModeType),
+          roundNumber: roundOfQuestion + 2,
+          totalRounds: roundCount,
+        };
+      }
     }
   }
 
@@ -228,21 +238,27 @@ async function buildCategoryGridFromDb(gameId: string): Promise<CategoryGridData
     include: {
       gameQuestions: {
         include: { question: { include: { category: true } } },
+        orderBy: { order: "asc" },
       },
     },
   });
   if (!game || !game.categoryPickMode) return null;
-  const counts = new Map<string, { name: string; color: string | null; count: number }>();
+  // Stesso scope per-round della broadcast live (emitCategoryGrid): al rejoin in un
+  // torneo la griglia deve mostrare solo le categorie del round corrente.
+  const { lo, hi } = currentRoundBounds(game, game.gameQuestions);
+  const counts = new Map<string, { name: string; color: string | null; icon: string | null; count: number }>();
   for (const gq of game.gameQuestions) {
     if (gq.askedAt) continue;
+    if (gq.order < lo || gq.order >= hi) continue; // solo round corrente
     const k = gq.question.categoryId;
-    if (!counts.has(k)) counts.set(k, { name: gq.question.category?.name ?? "?", color: gq.question.category?.color ?? null, count: 0 });
+    if (!counts.has(k)) counts.set(k, { name: gq.question.category?.name ?? "?", color: gq.question.category?.color ?? null, icon: gq.question.category?.icon ?? null, count: 0 });
     counts.get(k)!.count += 1;
   }
   const categories = Array.from(counts.entries()).map(([id, v]) => ({
     id,
     name: v.name,
     color: v.color,
+    icon: v.icon,
     remaining: v.count,
   }));
   return { categories };
@@ -344,7 +360,9 @@ export async function buildGameStateSnapshotFromDB(
     if (resolveTurnConfig(game).turnBased) {
       const activeOrder = parseActiveTurnOrder(game.turnOrder, game.players);
       const attempts = await prisma.playerAnswer.count({ where: { gameQuestionId: currentGq.id } });
-      const turnId = turnPlayerId(activeOrder, game.currentIndex, attempts);
+      // Rotazione sul numero di domande estratte (robusta a currentIndex che salta).
+      const askedCount = await prisma.gameQuestion.count({ where: { gameId, askedAt: { not: null } } });
+      const turnId = turnPlayerId(activeOrder, questionSeq(askedCount), attempts);
       questionPayload.turnPlayerId = turnId;
       questionPayload.turnPlayerNickname = game.players.find((p) => p.id === turnId)?.nickname ?? null;
     }

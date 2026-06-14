@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { sendNextQuestion } from "@/lib/game-actions";
+import { currentRoundBounds } from "@/lib/turn";
 
 // Migrazione vercel-pusher fase 7.4.
 // Sostituisce: socket.on("host:category-pick").
@@ -25,8 +26,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!game || !game.categoryPickMode) {
     return NextResponse.json({ error: "Non in modalità \"Scegli categoria\"" }, { status: 400 });
   }
+  // Limita la scelta al round corrente: così chosen.order resta nel blocco-tipo
+  // del round e le modalità non si mescolano (no-op nelle partite a round singolo).
+  const { lo, hi } = currentRoundBounds(game, game.gameQuestions);
   const candidates = game.gameQuestions.filter(
-    (gq) => !gq.askedAt && gq.question.categoryId === categoryId,
+    (gq) => !gq.askedAt && gq.order >= lo && gq.order < hi && gq.question.categoryId === categoryId,
   );
   if (candidates.length === 0) {
     return NextResponse.json({ error: "Categoria esaurita" }, { status: 409 });

@@ -975,7 +975,7 @@ export default function HostLobbyPage() {
           </div>
 
           <button onClick={endQuestion} className="btn-primary w-full text-lg py-4">
-            {question.questionNumber >= question.totalQuestions ? "Mostra risultati finali" : "Prossima domanda →"}
+            Rivela risposta →
           </button>
           <button onClick={finishGameEarly} className="text-sm text-muted hover:text-danger w-full text-center py-2 mt-2">
             ✋ Termina partita ora
@@ -1128,6 +1128,58 @@ export default function HostLobbyPage() {
               ))}
             </div>
           )}
+        </div>
+      </main>
+    );
+  }
+
+  // Schermata DEDICATA "Round finito": il reveal segnala un cambio round (torneo).
+  // nextRound è valorizzato solo per round NON finali, quindi non serve controllare
+  // questionNumber. Non dipende da `question` (null al refresh durante un reveal) così
+  // l'host non resta bloccato sulla lobby a fine round.
+  if (phase === "REVEAL" && reveal && reveal.nextRound) {
+    const finishedRound = reveal.nextRound.roundNumber - 1;
+    return (
+      <main className="min-h-screen p-4 md:p-8 flex items-center">
+        <div className="max-w-3xl mx-auto w-full">
+          <div className="text-center mb-8 animate-slide-up">
+            <div className="chip-gold inline-flex mb-3">🏁 Round completato</div>
+            <h1 className="text-4xl md:text-5xl font-semibold mb-2">
+              Round {finishedRound} completato
+            </h1>
+            <p className="text-muted">
+              Round {reveal.nextRound.roundNumber} / {reveal.nextRound.totalRounds} ·
+              prossima modalità: <span className="font-bold text-accent">{reveal.nextRound.modeLabel}</span>
+            </p>
+          </div>
+
+          <div className="card mb-8">
+            <h3 className="font-bold mb-4 text-center">Classifica</h3>
+            <div className="space-y-2">
+              {players.slice(0, 10).map((p, i) => (
+                <div key={p.id} className={`flex items-center justify-between py-1 ${p.eliminated ? "opacity-50" : ""}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted text-sm w-6">#{i + 1}</span>
+                    {p.avatarUrl ? (
+                      <img src={p.avatarUrl} alt="" className="w-7 h-7 rounded-full object-cover" />
+                    ) : (
+                      <span className="text-xl">{p.emoji || "🎮"}</span>
+                    )}
+                    <span className={p.eliminated ? "line-through text-muted" : ""}>{p.nickname}</span>
+                    {p.eliminated && <span className="text-xs px-2 py-0.5 rounded-full bg-danger/20 text-danger">💀 ELIMINATO</span>}
+                    {livesAllowed && !p.eliminated && typeof p.wrongCount === "number" && (
+                      <span className="text-xs">{"❤️".repeat(Math.max(0, livesAllowed - p.wrongCount))}{"🖤".repeat(p.wrongCount)}</span>
+                    )}
+                  </div>
+                  <span className="font-bold text-accent">{p.score}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <button onClick={nextQuestion} className="btn-primary w-full">
+            Inizia round {reveal.nextRound.roundNumber}: {reveal.nextRound.modeLabel}
+          </button>
         </div>
       </main>
     );

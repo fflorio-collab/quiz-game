@@ -6,7 +6,7 @@ import { evaluateBadgeUnlocks } from "@/lib/gamification/badges";
 import { QUESTION_TYPE_META, getTypeLabel } from "@/lib/questionTypes";
 import { broadcastLobby, emitLocalRoundState } from "@/lib/game-broadcasts";
 import { resolveTimeLimit, buildJudgeAnswersData, buildRevealDataFromDb } from "@/lib/game-snapshot";
-import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId } from "@/lib/turn";
+import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId, currentRoundBounds, questionSeq } from "@/lib/turn";
 import type { QuestionType } from "@/types/socket";
 
 function shuffle<T>(arr: T[]): T[] {
@@ -113,6 +113,11 @@ export async function sendNextQuestion(gameId: string): Promise<void> {
     return;
   }
 
+  // Idempotenza: se la domanda corrente è già stata estratta e non ancora rivelata
+  // (es. doppio click su "Prossima domanda" / "Inizia round"), non ri-mandarla né
+  // resettare il timer di tutti.
+  if (gq.askedAt && !gq.revealedAt) return;
+
   // "Ultimo in piedi": se è rimasto un solo giocatore attivo, fine partita.
   if (game.lastManStanding) {
     const activeCount = await prisma.player.count({ where: { gameId, eliminated: false } });
@@ -145,7 +150,11 @@ export async function sendNextQuestion(gameId: string): Promise<void> {
       select: { id: true, nickname: true, eliminated: true, joinedAt: true },
     });
     const activeOrder = parseActiveTurnOrder(game.turnOrder, players);
-    turnPlayerIdValue = turnPlayerId(activeOrder, game.currentIndex, 0);
+    // Rotazione sul numero di domande estratte (clean 0,1,2… anche con Scegli
+    // categoria / Jeopardy dove currentIndex salta). La domanda corrente è già
+    // marcata askedAt nel DB ma non nella lista in memoria → +1. seq = askedCount-1.
+    const askedCount = game.gameQuestions.filter((g) => g.askedAt).length + 1;
+    turnPlayerIdValue = turnPlayerId(activeOrder, questionSeq(askedCount), 0);
     turnPlayerNickname = players.find((p) => p.id === turnPlayerIdValue)?.nickname ?? null;
   }
 
@@ -212,7 +221,16 @@ export async function handleQuestionEnd(
   questionId: string,
   questionType: QuestionType,
 ): Promise<void> {
-  if (QUESTION_TYPE_META[questionType].requiresJudging) {
+  // Modalità presentatore: l'host ha già giudicato a voce ogni giocatore tramite
+  // /local-judge nella schermata della domanda, quindi NON serve la fase separata
+  // "Giudica le risposte". Si rivela direttamente (revealAnswer → currentIndex++),
+  // anche per i tipi requiresJudging (OPEN_ANSWER, IMAGE_GUESS, …). Così l'indice
+  // avanza sempre di 1 per domanda e la rotazione dei turni resta uniforme.
+  const game = await prisma.game.findUnique({
+    where: { id: gameId },
+    select: { localPartyMode: true },
+  });
+  if (!game?.localPartyMode && QUESTION_TYPE_META[questionType].requiresJudging) {
     await sendAnswersForJudgment(gameId, gameQuestionId, questionId);
   } else {
     await revealAnswer(gameId, gameQuestionId);
@@ -229,8 +247,9 @@ export async function passTurn(
   game: Parameters<typeof resolveTimeLimit>[0],
   activeOrder: string[],
   attemptsNow: number,
+  seq: number,
 ): Promise<void> {
-  const nextId = turnPlayerId(activeOrder, game.currentIndex, attemptsNow);
+  const nextId = turnPlayerId(activeOrder, seq, attemptsNow);
   const effLimit = resolveTimeLimit(game, currentGq.question.timeLimit);
   await prisma.game.update({
     where: { id: gameId },
@@ -294,7 +313,9 @@ export async function handleTurnDeadline(gameId: string): Promise<void> {
   });
   const activeOrder = parseActiveTurnOrder(game.turnOrder, players);
   const attempts = await prisma.playerAnswer.count({ where: { gameQuestionId: currentGq.id } });
-  const curId = turnPlayerId(activeOrder, game.currentIndex, attempts);
+  // La domanda corrente è già marcata askedAt → askedCount la include, seq = count-1.
+  const seq = questionSeq(game.gameQuestions.filter((g) => g.askedAt).length);
+  const curId = turnPlayerId(activeOrder, seq, attempts);
   if (curId) {
     try {
       await prisma.playerAnswer.create({
@@ -317,7 +338,7 @@ export async function handleTurnDeadline(gameId: string): Promise<void> {
   if (attemptsNow >= activeOrder.length) {
     await handleQuestionEnd(gameId, currentGq.id, currentGq.question.id, qType);
   } else {
-    await passTurn(gameId, currentGq, game, activeOrder, attemptsNow);
+    await passTurn(gameId, currentGq, game, activeOrder, attemptsNow, seq);
   }
 }
 
@@ -396,13 +417,20 @@ export async function emitCategoryGrid(gameId: string): Promise<void> {
   const game = await prisma.game.findUnique({
     where: { id: gameId },
     include: {
-      gameQuestions: { include: { question: { include: { category: true } } } },
+      gameQuestions: {
+        include: { question: { include: { category: true } } },
+        orderBy: { order: "asc" },
+      },
     },
   });
   if (!game || !game.categoryPickMode) return;
+  // In un torneo, mostra solo le categorie del round CORRENTE così le modalità
+  // restano nell'ordine selezionato (no-op nelle partite a round singolo).
+  const { lo, hi } = currentRoundBounds(game, game.gameQuestions);
   const counts = new Map<string, { name: string; color: string | null; icon: string | null; count: number }>();
   for (const gq of game.gameQuestions) {
     if (gq.askedAt) continue;
+    if (gq.order < lo || gq.order >= hi) continue; // solo round corrente
     const k = gq.question.categoryId;
     if (!counts.has(k)) {
       counts.set(k, {

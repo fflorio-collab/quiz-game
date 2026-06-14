@@ -5,7 +5,7 @@ import { QUESTION_TYPE_META } from "@/lib/questionTypes";
 import { broadcastToGame } from "@/lib/pusher-server";
 import { resolveTimeLimit } from "@/lib/game-snapshot";
 import { resolveBasePoints, handleQuestionEnd, passTurn } from "@/lib/game-actions";
-import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId } from "@/lib/turn";
+import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId, questionSeq } from "@/lib/turn";
 import type { QuestionType } from "@/types/socket";
 
 // Migrazione vercel-pusher fase 7.2.
@@ -61,6 +61,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const turnCfg = resolveTurnConfig(game);
   let activeOrder: string[] = [];
   let attemptsBefore = 0;
+  let seq = 0;
   if (turnCfg.turnBased) {
     const turnPlayers = await prisma.player.findMany({
       where: { gameId },
@@ -69,7 +70,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     });
     activeOrder = parseActiveTurnOrder(game.turnOrder, turnPlayers);
     attemptsBefore = await prisma.playerAnswer.count({ where: { gameQuestionId: currentGQ.id } });
-    const turnId = turnPlayerId(activeOrder, game.currentIndex, attemptsBefore);
+    // Rotazione sul numero di domande estratte (robusta a currentIndex che salta).
+    seq = questionSeq(game.gameQuestions.filter((g) => g.askedAt).length);
+    const turnId = turnPlayerId(activeOrder, seq, attemptsBefore);
     if (turnId && turnId !== playerId) {
       return NextResponse.json({ error: "Non è il tuo turno" }, { status: 403 });
     }
@@ -188,7 +191,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       if (attemptsNow >= activeOrder.length) {
         await handleQuestionEnd(gameId, currentGQ.id, currentGQ.question.id, questionType);
       } else {
-        await passTurn(gameId, currentGQ, game, activeOrder, attemptsNow);
+        await passTurn(gameId, currentGQ, game, activeOrder, attemptsNow, seq);
       }
     }
   } else {

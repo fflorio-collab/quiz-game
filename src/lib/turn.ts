@@ -1,4 +1,5 @@
 import { parseRoundsConfig, effectiveRound } from "@/lib/roundsConfig";
+import type { QuestionType } from "@/types/socket";
 
 // Logica dei turni (modalità TURN_BASED). Funzioni pure, niente accesso al DB:
 // vengono riusate da answer-route, tick-route, snapshot e game-actions.
@@ -77,4 +78,58 @@ export function turnPlayerId(
 ): string | null {
   if (activeOrder.length === 0) return null;
   return activeOrder[(currentIndex + attempts) % activeOrder.length];
+}
+
+// ─── Layout dei round (robusto a indici che "saltano": Scegli categoria / Jeopardy) ──
+// Sorgente preferita: roundsConfig (ricco di override per-round); fallback: tournamentModes (CSV).
+// Entrambi nascono dallo stesso array `modes` in route.ts → stessa lunghezza/ordine.
+// null = partita single-round (nessun confine di round).
+export function resolveRoundTypes(game: {
+  roundsConfig: string | null;
+  tournamentModes: string | null;
+}): QuestionType[] | null {
+  const rounds = parseRoundsConfig(game.roundsConfig);
+  if (rounds && rounds.length > 0) return rounds.map((r) => r.type) as QuestionType[];
+  if (game.tournamentModes) {
+    const modes = game.tournamentModes.split(",").filter(Boolean) as QuestionType[];
+    if (modes.length > 0) return modes;
+  }
+  return null;
+}
+
+// roundCount + perRound canonici. perRound = floor(totalQuestions / roundCount).
+export function resolveRoundLayout(game: {
+  roundsConfig: string | null;
+  tournamentModes: string | null;
+  totalQuestions: number;
+}): { roundTypes: QuestionType[]; roundCount: number; perRound: number } | null {
+  const roundTypes = resolveRoundTypes(game);
+  if (!roundTypes || roundTypes.length === 0) return null;
+  const roundCount = roundTypes.length;
+  return { roundTypes, roundCount, perRound: Math.max(1, Math.floor(game.totalQuestions / roundCount)) };
+}
+
+// Finestra [lo, hi) di `order` del round CORRENTE = round più basso con almeno una
+// domanda non ancora estratta (askedAt == null). Robusto perché si basa su `order`
+// (fisso) + askedAt, non su currentIndex (che salta in categoryPick).
+// `gameQuestions` DEVE essere ordinato per order asc.
+export function currentRoundBounds(
+  game: { roundsConfig: string | null; tournamentModes: string | null; totalQuestions: number },
+  gameQuestions: { order: number; askedAt: Date | null }[],
+): { lo: number; hi: number } {
+  const layout = resolveRoundLayout(game);
+  if (!layout) return { lo: 0, hi: Number.MAX_SAFE_INTEGER }; // single-round: tutte le domande
+  const { roundCount, perRound } = layout;
+  const firstUnasked = gameQuestions.find((gq) => !gq.askedAt);
+  const currentRound = firstUnasked
+    ? Math.min(roundCount - 1, Math.floor(firstUnasked.order / perRound))
+    : 0;
+  return { lo: currentRound * perRound, hi: (currentRound + 1) * perRound };
+}
+
+// Numero di sequenza 0-based della domanda corrente, robusto a indici che "saltano".
+// askedCount include la domanda corrente (già marcata askedAt): la sua posizione
+// 0-based nella sequenza di gioco è askedCount - 1.
+export function questionSeq(askedCount: number): number {
+  return Math.max(0, askedCount - 1);
 }
