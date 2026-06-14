@@ -348,14 +348,14 @@ export default function HostLobbyPage() {
   };
   const localJudge = (playerId: string, isCorrect: boolean) => postGame("/local-judge", { playerId, isCorrect });
   const setLocalTurn = (playerId: string | null) => postGame("/local-turn", { playerId });
-  const pickCategory = async (categoryId: string) => {
+  const pickCategory = async (categoryId: string, difficulty?: string) => {
     if (pickPending) return;
     setPickPending(true);
     try {
       const r = await fetch(`/api/game/${gameId}/category-pick`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ categoryId }),
+        body: JSON.stringify({ categoryId, difficulty }),
       });
       // 409 (scelta già in corso / categoria esaurita) o errore → riabilita i bottoni.
       // Sul successo la fase passa a QUESTION via game:question e la griglia si smonta.
@@ -513,6 +513,11 @@ export default function HostLobbyPage() {
   if (phase === "CATEGORY_PICK" && categoryGrid) {
     const availableCats = categoryGrid.categories.filter((c) => c.remaining > 0);
     const totalRemaining = availableCats.reduce((sum, c) => sum + c.remaining, 0);
+    const DIFFICULTY_META: Record<string, { label: string; emoji: string; cls: string }> = {
+      EASY: { label: "Facile", emoji: "🟢", cls: "border-success/50 bg-success/10 text-success" },
+      MEDIUM: { label: "Medio", emoji: "🟡", cls: "border-gold/50 bg-gold/10 text-gold" },
+      HARD: { label: "Difficile", emoji: "🔴", cls: "border-danger/50 bg-danger/10 text-danger" },
+    };
     return (
       <main className="min-h-screen p-4 md:p-8">
         <div className="max-w-4xl mx-auto">
@@ -542,26 +547,35 @@ export default function HostLobbyPage() {
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
             {categoryGrid.categories.map((c) => {
-              const exhausted = c.remaining === 0;
-              const disabled = exhausted || pickPending; // click bloccato anche durante una scelta in corso
+              const diffs = c.difficulties ?? [];
               return (
-                <button
+                <div
                   key={c.id}
-                  onClick={() => !disabled && pickCategory(c.id)}
-                  disabled={disabled}
-                  className={`p-4 rounded-xl border-2 text-left transition-all ${
-                    exhausted
-                      ? "border-border/30 bg-surface/30 opacity-30 cursor-not-allowed"
-                      : "border-gold bg-gold/10 hover:bg-gold/20 active:scale-95"
-                  }`}
-                  style={!exhausted && c.color ? { borderColor: c.color, backgroundColor: `${c.color}15` } : undefined}
+                  className="p-4 rounded-xl border-2 border-border bg-surface/40"
+                  style={c.color ? { borderColor: `${c.color}66` } : undefined}
                 >
-                  <div className="text-3xl mb-1">{c.icon || "🏷️"}</div>
-                  <div className="font-bold truncate">{c.name}</div>
-                  <div className="text-xs text-muted mt-1">
-                    {exhausted ? "Esaurita" : `${c.remaining} rimaste`}
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-2xl">{c.icon || "🏷️"}</span>
+                    <span className="font-bold truncate">{c.name}</span>
                   </div>
-                </button>
+                  <div className="flex flex-col gap-2">
+                    {diffs.length === 0 && <span className="text-xs text-muted">Nessuna domanda</span>}
+                    {diffs.map((d) => {
+                      const meta = DIFFICULTY_META[d.difficulty] ?? { label: d.difficulty, emoji: "❓", cls: "border-border" };
+                      return (
+                        <button
+                          key={d.difficulty}
+                          onClick={() => !pickPending && pickCategory(c.id, d.difficulty)}
+                          disabled={pickPending}
+                          className={`flex items-center justify-between gap-2 p-2 px-3 rounded-lg border-2 transition-all ${meta.cls} ${pickPending ? "opacity-40 cursor-not-allowed" : "hover:brightness-125 active:scale-95"}`}
+                        >
+                          <span className="font-medium text-sm">{meta.emoji} {meta.label}</span>
+                          <span className="font-bold text-sm">{d.points} pt</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               );
             })}
           </div>

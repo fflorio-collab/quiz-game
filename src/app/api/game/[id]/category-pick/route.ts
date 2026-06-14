@@ -10,15 +10,18 @@ import { currentRoundBounds } from "@/lib/turn";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: gameId } = await params;
-  const body = (await req.json().catch(() => null)) as { categoryId?: string } | null;
+  const body = (await req.json().catch(() => null)) as { categoryId?: string; difficulty?: string } | null;
   const categoryId = String(body?.categoryId ?? "");
+  // Difficoltà opzionale: se presente si pesca una domanda di quella categoria E difficoltà
+  // (così l'utente sa quanti punti si gioca). Assente = qualunque difficoltà (retrocompatibile).
+  const difficulty = body?.difficulty ? String(body.difficulty) : null;
   if (!categoryId) return NextResponse.json({ error: "categoryId richiesto" }, { status: 400 });
 
   const game = await prisma.game.findUnique({
     where: { id: gameId },
     include: {
       gameQuestions: {
-        include: { question: { select: { id: true, categoryId: true } } },
+        include: { question: { select: { id: true, categoryId: true, difficulty: true } } },
         orderBy: { order: "asc" },
       },
     },
@@ -30,7 +33,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // del round e le modalità non si mescolano (no-op nelle partite a round singolo).
   const { lo, hi } = currentRoundBounds(game, game.gameQuestions);
   const candidates = game.gameQuestions.filter(
-    (gq) => !gq.askedAt && gq.order >= lo && gq.order < hi && gq.question.categoryId === categoryId,
+    (gq) => !gq.askedAt && gq.order >= lo && gq.order < hi
+      && gq.question.categoryId === categoryId
+      && (!difficulty || gq.question.difficulty === difficulty),
   );
   if (candidates.length === 0) {
     return NextResponse.json({ error: "Categoria esaurita" }, { status: 409 });

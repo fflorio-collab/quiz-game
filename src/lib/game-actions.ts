@@ -5,8 +5,8 @@ import { xpForGame, levelFromXp } from "@/lib/gamification/xp";
 import { evaluateBadgeUnlocks } from "@/lib/gamification/badges";
 import { QUESTION_TYPE_META, getTypeLabel } from "@/lib/questionTypes";
 import { broadcastLobby, emitLocalRoundState } from "@/lib/game-broadcasts";
-import { resolveTimeLimit, buildJudgeAnswersData, buildRevealDataFromDb } from "@/lib/game-snapshot";
-import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId, currentRoundBounds, questionSeq } from "@/lib/turn";
+import { resolveTimeLimit, buildJudgeAnswersData, buildRevealDataFromDb, buildCategoryCells } from "@/lib/game-snapshot";
+import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId, questionSeq } from "@/lib/turn";
 import type { QuestionType } from "@/types/socket";
 
 function shuffle<T>(arr: T[]): T[] {
@@ -425,31 +425,9 @@ export async function emitCategoryGrid(gameId: string): Promise<void> {
     },
   });
   if (!game || !game.categoryPickMode) return;
-  // In un torneo, mostra solo le categorie del round CORRENTE così le modalità
-  // restano nell'ordine selezionato (no-op nelle partite a round singolo).
-  const { lo, hi } = currentRoundBounds(game, game.gameQuestions);
-  const counts = new Map<string, { name: string; color: string | null; icon: string | null; count: number }>();
-  for (const gq of game.gameQuestions) {
-    if (gq.askedAt) continue;
-    if (gq.order < lo || gq.order >= hi) continue; // solo round corrente
-    const k = gq.question.categoryId;
-    if (!counts.has(k)) {
-      counts.set(k, {
-        name: gq.question.category?.name ?? "?",
-        color: gq.question.category?.color ?? null,
-        icon: gq.question.category?.icon ?? null,
-        count: 0,
-      });
-    }
-    counts.get(k)!.count += 1;
-  }
-  const categories = Array.from(counts.entries()).map(([id, v]) => ({
-    id,
-    name: v.name,
-    color: v.color,
-    icon: v.icon,
-    remaining: v.count,
-  }));
+  // Celle categoria suddivise per difficoltà (con punti), limitate al round corrente.
+  // Stessa sorgente dello snapshot (buildCategoryCells) → niente divergenze.
+  const categories = buildCategoryCells(game, game.gameQuestions);
 
   await clearRevealDb(gameId);
   await clearJudgingDb(gameId);

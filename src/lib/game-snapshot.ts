@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { loadDuelStateFromDB } from "@/lib/duel-state";
 import { getTypeLabel } from "@/lib/questionTypes";
 import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId, resolveRoundLayout, questionSeq, currentRoundBounds } from "@/lib/turn";
+import { difficultyMultiplier } from "@/lib/utils";
 import type {
   GameStateSnapshot,
   PlayerInfo,
@@ -233,6 +234,72 @@ async function buildJeopardyGridFromDb(gameId: string): Promise<JeopardyGridData
   return { cells };
 }
 
+// Ordine di visualizzazione delle difficoltà (punti crescenti).
+const DIFFICULTY_ORDER = ["EASY", "MEDIUM", "HARD"];
+
+// Costruisce le celle categoria della griglia "Scegli categoria", suddivise per
+// difficoltà con i punti in palio (base × moltiplicatore). Scope al round corrente.
+// Unica sorgente condivisa tra la broadcast live (emitCategoryGrid) e lo snapshot,
+// così non possono divergere.
+export function buildCategoryCells(
+  game: { roundsConfig: string | null; tournamentModes: string | null; totalQuestions: number; pointsOverrides: string | null },
+  gameQuestions: Array<{
+    order: number;
+    askedAt: Date | null;
+    question: { categoryId: string; points: number; difficulty: string; category: { name: string; color: string | null; icon: string | null } | null };
+  }>,
+): CategoryGridData["categories"] {
+  const { lo, hi } = currentRoundBounds(game, gameQuestions);
+  // Base punti del round corrente: se il torneo ha pointsOverrides usa quello (così i
+  // punti mostrati == quelli assegnati). Round corrente derivato da lo (order-based,
+  // robusto ai salti di currentIndex), non da currentIndex. Allineato a resolveBasePoints.
+  let roundOverride = 0;
+  if (game.pointsOverrides) {
+    const values = game.pointsOverrides.split(",").map((n) => Number(n));
+    const layout = resolveRoundLayout(game);
+    const idx = layout && layout.roundCount > 1 ? Math.min(layout.roundCount - 1, Math.floor(lo / layout.perRound)) : 0;
+    const v = values[idx];
+    if (v && v > 0) roundOverride = v;
+  }
+  const baseFor = (qPoints: number) => (roundOverride > 0 ? roundOverride : qPoints);
+  type Cell = {
+    name: string; color: string | null; icon: string | null; total: number;
+    byDiff: Map<string, { count: number; points: number }>;
+  };
+  const cats = new Map<string, Cell>();
+  for (const gq of gameQuestions) {
+    if (gq.askedAt) continue;
+    if (gq.order < lo || gq.order >= hi) continue; // solo round corrente
+    const k = gq.question.categoryId;
+    if (!cats.has(k)) {
+      cats.set(k, {
+        name: gq.question.category?.name ?? "?",
+        color: gq.question.category?.color ?? null,
+        icon: gq.question.category?.icon ?? null,
+        total: 0,
+        byDiff: new Map(),
+      });
+    }
+    const cell = cats.get(k)!;
+    cell.total += 1;
+    const d = gq.question.difficulty;
+    if (!cell.byDiff.has(d)) {
+      cell.byDiff.set(d, { count: 0, points: Math.round(baseFor(gq.question.points) * difficultyMultiplier(d)) });
+    }
+    cell.byDiff.get(d)!.count += 1;
+  }
+  return Array.from(cats.entries()).map(([id, v]) => ({
+    id,
+    name: v.name,
+    color: v.color,
+    icon: v.icon,
+    remaining: v.total,
+    difficulties: DIFFICULTY_ORDER
+      .filter((d) => v.byDiff.has(d))
+      .map((d) => ({ difficulty: d, remaining: v.byDiff.get(d)!.count, points: v.byDiff.get(d)!.points })),
+  }));
+}
+
 async function buildCategoryGridFromDb(gameId: string): Promise<CategoryGridData | null> {
   const game = await prisma.game.findUnique({
     where: { id: gameId },
@@ -245,24 +312,7 @@ async function buildCategoryGridFromDb(gameId: string): Promise<CategoryGridData
     },
   });
   if (!game || !game.categoryPickMode) return null;
-  // Stesso scope per-round della broadcast live (emitCategoryGrid): al rejoin in un
-  // torneo la griglia deve mostrare solo le categorie del round corrente.
-  const { lo, hi } = currentRoundBounds(game, game.gameQuestions);
-  const counts = new Map<string, { name: string; color: string | null; icon: string | null; count: number }>();
-  for (const gq of game.gameQuestions) {
-    if (gq.askedAt) continue;
-    if (gq.order < lo || gq.order >= hi) continue; // solo round corrente
-    const k = gq.question.categoryId;
-    if (!counts.has(k)) counts.set(k, { name: gq.question.category?.name ?? "?", color: gq.question.category?.color ?? null, icon: gq.question.category?.icon ?? null, count: 0 });
-    counts.get(k)!.count += 1;
-  }
-  const categories = Array.from(counts.entries()).map(([id, v]) => ({
-    id,
-    name: v.name,
-    color: v.color,
-    icon: v.icon,
-    remaining: v.count,
-  }));
+  const categories = buildCategoryCells(game, game.gameQuestions);
   // Chi sceglierà = chi risponderà alla prossima domanda (stessa formula di emitCategoryGrid).
   let turnId: string | null = null;
   let turnNickname: string | null = null;

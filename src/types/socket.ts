@@ -279,6 +279,9 @@ export interface CategoryGridData {
     icon?: string | null;
     color?: string | null;
     remaining: number; // domande ancora disponibili in questa categoria per la partita
+    // Suddivisione per difficoltà (round corrente): per scegliere categoria + difficoltà
+    // e vedere i punti in palio. points = base × moltiplicatore (Facile 50 / Medio 100 / Difficile 200).
+    difficulties?: Array<{ difficulty: string; remaining: number; points: number }>;
   }>;
   // Modalità a turni: chi sceglierà la categoria = chi risponderà alla prossima
   // domanda (rotazione asked-count). null/undefined = free-for-all (sceglie l'host).
