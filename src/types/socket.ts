@@ -280,6 +280,10 @@ export interface CategoryGridData {
     color?: string | null;
     remaining: number; // domande ancora disponibili in questa categoria per la partita
   }>;
+  // Modalità a turni: chi sceglierà la categoria = chi risponderà alla prossima
+  // domanda (rotazione asked-count). null/undefined = free-for-all (sceglie l'host).
+  turnPlayerId?: string | null;
+  turnPlayerNickname?: string | null;
   // Informazioni sul round corrente in torneo (per contesto UI); undefined se singola modalità
   roundInfo?: {
     modeType: QuestionType;

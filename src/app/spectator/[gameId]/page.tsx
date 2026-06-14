@@ -375,12 +375,13 @@ export default function SpectatorViewerPage() {
               </div>
             )}
 
-            {activePlayerId && (() => {
-              const p = players.find((x) => x.id === activePlayerId);
-              return p ? (
+            {categoryGrid.turnPlayerId && (() => {
+              const p = players.find((x) => x.id === categoryGrid.turnPlayerId);
+              const name = p ? `${p.emoji || "🎮"} ${p.nickname}` : categoryGrid.turnPlayerNickname;
+              return name ? (
                 <div className="mb-4 p-3 rounded-xl bg-gold/10 ring-1 ring-gold/40 text-center">
                   <span className="text-sm text-muted mr-2">🎯 Sceglie</span>
-                  <span className="text-2xl font-bold">{p.emoji || "🎮"} {p.nickname}</span>
+                  <span className="text-2xl font-bold">{name}</span>
                 </div>
               ) : null;
             })()}

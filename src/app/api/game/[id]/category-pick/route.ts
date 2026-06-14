@@ -36,10 +36,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ error: "Categoria esaurita" }, { status: 409 });
   }
   const chosen = candidates[Math.floor(Math.random() * candidates.length)];
-  await prisma.game.update({
-    where: { id: gameId },
+  // Claim atomico: solo la prima richiesta concorrente vince (awaitingCategoryPick
+  // true→false in un solo update). Un doppio-tap troverebbe awaitingCategoryPick già
+  // false e si ferma PRIMA di marcare una seconda domanda askedAt → niente domanda
+  // "consumata ma mai mostrata", niente salto del numero. sendNextQuestion gira solo sul vincitore.
+  const claimed = await prisma.game.updateMany({
+    where: { id: gameId, awaitingCategoryPick: true },
     data: { currentIndex: chosen.order, awaitingCategoryPick: false },
   });
+  if (claimed.count === 0) {
+    return NextResponse.json({ error: "Scelta già in corso" }, { status: 409 });
+  }
   await sendNextQuestion(gameId);
   return NextResponse.json({ ok: true });
 }

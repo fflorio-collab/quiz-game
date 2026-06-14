@@ -66,6 +66,7 @@ export default function HostLobbyPage() {
   // "Scegli categoria"
   const [categoryPickMode, setCategoryPickMode] = useState(false);
   const [categoryGrid, setCategoryGrid] = useState<CategoryGridData | null>(null);
+  const [pickPending, setPickPending] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem("hostCode");
@@ -225,6 +226,7 @@ export default function HostLobbyPage() {
     };
     const onCategoryGrid = (data: CategoryGridData) => {
       setCategoryGrid(data);
+      setPickPending(false);
       setPhase("CATEGORY_PICK");
     };
     const onAnswerReceived = () => setAnsweredCount((c) => c + 1);
@@ -346,7 +348,22 @@ export default function HostLobbyPage() {
   };
   const localJudge = (playerId: string, isCorrect: boolean) => postGame("/local-judge", { playerId, isCorrect });
   const setLocalTurn = (playerId: string | null) => postGame("/local-turn", { playerId });
-  const pickCategory = (categoryId: string) => postGame("/category-pick", { categoryId });
+  const pickCategory = async (categoryId: string) => {
+    if (pickPending) return;
+    setPickPending(true);
+    try {
+      const r = await fetch(`/api/game/${gameId}/category-pick`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ categoryId }),
+      });
+      // 409 (scelta già in corso / categoria esaurita) o errore → riabilita i bottoni.
+      // Sul successo la fase passa a QUESTION via game:question e la griglia si smonta.
+      if (!r.ok) setPickPending(false);
+    } catch {
+      setPickPending(false);
+    }
+  };
   const finishGameEarly = () => {
     if (!window.confirm("Terminare la partita ora? La classifica finale verrà calcolata con i punti attuali.")) return;
     postGame("/finish");
@@ -505,6 +522,13 @@ export default function HostLobbyPage() {
             <p className="text-muted text-sm">
               {totalRemaining} domande rimaste · {availableCats.length} categorie disponibili
             </p>
+            {categoryGrid.turnPlayerId && categoryGrid.turnPlayerNickname && (
+              <div className="mt-3 inline-flex items-center gap-2 p-2 px-4 rounded-xl bg-gold/10 ring-1 ring-gold/40">
+                <span className="text-sm text-muted">🎯 Tocca a</span>
+                <span className="text-xl font-bold">{categoryGrid.turnPlayerNickname}</span>
+                <span className="text-sm text-muted">scegliere la categoria</span>
+              </div>
+            )}
           </div>
 
           {/* Classifica compatta */}
@@ -518,23 +542,24 @@ export default function HostLobbyPage() {
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
             {categoryGrid.categories.map((c) => {
-              const disabled = c.remaining === 0;
+              const exhausted = c.remaining === 0;
+              const disabled = exhausted || pickPending; // click bloccato anche durante una scelta in corso
               return (
                 <button
                   key={c.id}
                   onClick={() => !disabled && pickCategory(c.id)}
                   disabled={disabled}
                   className={`p-4 rounded-xl border-2 text-left transition-all ${
-                    disabled
+                    exhausted
                       ? "border-border/30 bg-surface/30 opacity-30 cursor-not-allowed"
                       : "border-gold bg-gold/10 hover:bg-gold/20 active:scale-95"
                   }`}
-                  style={!disabled && c.color ? { borderColor: c.color, backgroundColor: `${c.color}15` } : undefined}
+                  style={!exhausted && c.color ? { borderColor: c.color, backgroundColor: `${c.color}15` } : undefined}
                 >
                   <div className="text-3xl mb-1">{c.icon || "🏷️"}</div>
                   <div className="font-bold truncate">{c.name}</div>
                   <div className="text-xs text-muted mt-1">
-                    {disabled ? "Esaurita" : `${c.remaining} rimaste`}
+                    {exhausted ? "Esaurita" : `${c.remaining} rimaste`}
                   </div>
                 </button>
               );

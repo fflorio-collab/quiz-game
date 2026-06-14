@@ -453,11 +453,44 @@ export async function emitCategoryGrid(gameId: string): Promise<void> {
 
   await clearRevealDb(gameId);
   await clearJudgingDb(gameId);
+
+  // Chi sceglierà la categoria = chi risponderà alla prossima domanda.
+  // askedCount = domande già servite (a grid-time la precedente è già rivelata);
+  // la prossima avrà askedSeq = askedCount → turno = activeOrder[askedCount % N]
+  // (identico a quanto calcolerà sendNextQuestion). Solo in modalità a turni.
+  let upcomingTurnId: string | null = null;
+  let upcomingTurnNickname: string | null = null;
+  if (resolveTurnConfig(game).turnBased) {
+    const askedCount = game.gameQuestions.filter((g) => g.askedAt).length;
+    const players = await prisma.player.findMany({
+      where: { gameId },
+      orderBy: { joinedAt: "asc" },
+      select: { id: true, nickname: true, eliminated: true, joinedAt: true },
+    });
+    const activeOrder = parseActiveTurnOrder(game.turnOrder, players);
+    upcomingTurnId = turnPlayerId(activeOrder, questionSeq(askedCount + 1), 0);
+    upcomingTurnNickname = players.find((p) => p.id === upcomingTurnId)?.nickname ?? null;
+  }
+
   await prisma.game.update({
     where: { id: gameId },
-    data: { awaitingCategoryPick: true },
+    data: { awaitingCategoryPick: true, localTurnPlayerId: upcomingTurnId },
   });
-  await broadcastToGame(gameId, "game:category-grid", { categories });
+  await broadcastToGame(gameId, "game:category-grid", {
+    categories,
+    turnPlayerId: upcomingTurnId,
+    turnPlayerNickname: upcomingTurnNickname,
+  });
+
+  // Presentatore: aggiorna l'highlight anche tra una domanda e l'altra, così
+  // l'evidenziato è chi sceglierà/risponderà alla prossima.
+  if (game.localPartyMode) {
+    await broadcastToGame(gameId, "game:local-state", {
+      gameQuestionId: "",
+      judgments: {},
+      activePlayerId: upcomingTurnId,
+    });
+  }
 }
 
 // Jeopardy: broadcast della griglia categoria × valore con flag "consumed"

@@ -237,6 +237,7 @@ async function buildCategoryGridFromDb(gameId: string): Promise<CategoryGridData
   const game = await prisma.game.findUnique({
     where: { id: gameId },
     include: {
+      players: true,
       gameQuestions: {
         include: { question: { include: { category: true } } },
         orderBy: { order: "asc" },
@@ -262,7 +263,16 @@ async function buildCategoryGridFromDb(gameId: string): Promise<CategoryGridData
     icon: v.icon,
     remaining: v.count,
   }));
-  return { categories };
+  // Chi sceglierà = chi risponderà alla prossima domanda (stessa formula di emitCategoryGrid).
+  let turnId: string | null = null;
+  let turnNickname: string | null = null;
+  if (resolveTurnConfig(game).turnBased) {
+    const askedCount = game.gameQuestions.filter((gq) => gq.askedAt).length;
+    const activeOrder = parseActiveTurnOrder(game.turnOrder, game.players);
+    turnId = turnPlayerId(activeOrder, questionSeq(askedCount + 1), 0);
+    turnNickname = game.players.find((p) => p.id === turnId)?.nickname ?? null;
+  }
+  return { categories, turnPlayerId: turnId, turnPlayerNickname: turnNickname };
 }
 
 export async function buildGameStateSnapshotFromDB(
@@ -316,6 +326,11 @@ export async function buildGameStateSnapshotFromDB(
   if (game.categoryPickMode && !currentGq && !activeReveal && !awaitingJudgment) {
     const grid = await buildCategoryGridFromDb(gameId);
     if (grid) snapshot.categoryGrid = grid;
+    // Presentatore: ripristina l'highlight 🎯 anche durante la griglia (al rejoin),
+    // come fa la broadcast live in emitCategoryGrid.
+    if (game.localPartyMode) {
+      snapshot.localState = { gameQuestionId: "", judgments: {}, activePlayerId: game.localTurnPlayerId ?? null };
+    }
   }
 
   if (awaitingJudgment) {

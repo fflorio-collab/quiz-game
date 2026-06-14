@@ -35,24 +35,19 @@ export function streakMultiplier(streak: number): number {
   return 1.0;
 }
 
-// Calcola punti in base al tempo di risposta (più veloce = più punti) e moltiplicati per la difficoltà.
-// Se timeLimitMs === 0 (senza limite) non c'è bonus tempo: punti pieni per risposta corretta.
+// Punti = base × moltiplicatore difficoltà (EASY 0.5 / MEDIUM 1 / HARD 2).
+// Niente bonus tempo, niente bonus streak: punteggio piatto e prevedibile
+// (base 100 → 50 / 100 / 200). I parametri timeTaken/timeLimit restano nella
+// firma per non toccare i call site, ma vengono ignorati.
 export function calculatePoints(
-  timeTakenMs: number,
-  timeLimitMs: number,
+  _timeTakenMs: number,
+  _timeLimitMs: number,
   isCorrect: boolean,
-  basePoints: number = 1000,
+  basePoints: number = 100,
   difficulty: string = "MEDIUM"
 ): number {
   if (!isCorrect) return 0;
-  if (timeLimitMs <= 0) {
-    // Senza limite di tempo: niente bonus velocità, solo moltiplicatore difficoltà
-    return Math.round(basePoints * difficultyMultiplier(difficulty));
-  }
-  const timeRatio = Math.max(0, 1 - timeTakenMs / timeLimitMs);
-  // Min metà, max basePoints se istantanea
-  const raw = basePoints * 0.5 + basePoints * 0.5 * timeRatio;
-  return Math.round(raw * difficultyMultiplier(difficulty));
+  return Math.round(basePoints * difficultyMultiplier(difficulty));
 }
 
 // Mischia un array (Fisher-Yates)

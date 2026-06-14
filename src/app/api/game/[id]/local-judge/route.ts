@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { calculatePoints, streakMultiplier } from "@/lib/utils";
+import { calculatePoints } from "@/lib/utils";
 import { resolveBasePoints } from "@/lib/game-actions";
 import { resolveTurnConfig } from "@/lib/turn";
 import { emitLocalRoundState, broadcastLeaderboard } from "@/lib/game-broadcasts";
@@ -40,8 +40,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   let points = 0;
   if (isCorrect) {
     const questionPoints = resolveBasePoints(game, current.question.points);
-    const base = calculatePoints(0, 0, true, questionPoints, current.question.difficulty);
-    points = Math.round(base * streakMultiplier(newStreak));
+    points = calculatePoints(0, 0, true, questionPoints, current.question.difficulty);
   }
 
   const existing = await prisma.playerAnswer.findUnique({

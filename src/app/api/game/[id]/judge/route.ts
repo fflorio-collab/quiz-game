@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { calculatePoints, streakMultiplier } from "@/lib/utils";
+import { calculatePoints } from "@/lib/utils";
 import { resolveTimeLimit } from "@/lib/game-snapshot";
 import { resolveBasePoints, revealAnswer } from "@/lib/game-actions";
 
@@ -65,8 +65,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       points = judgment.isCorrect ? pl.pendingWager : -pl.pendingWager;
     } else if (judgment.isCorrect) {
       const questionPoints = resolveBasePoints(game, gq.question.points);
-      const base = calculatePoints(pa.timeTaken, effTimeLimit * 1000, true, questionPoints, gq.question.difficulty);
-      points = Math.round(base * streakMultiplier(newStreak));
+      points = calculatePoints(pa.timeTaken, effTimeLimit * 1000, true, questionPoints, gq.question.difficulty);
     }
 
     await prisma.playerAnswer.update({
