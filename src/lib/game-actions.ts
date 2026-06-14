@@ -135,9 +135,10 @@ export async function sendNextQuestion(gameId: string): Promise<void> {
 
   // Modalità a turni: chi è di turno su questa (nuova) domanda. attempts=0 perché
   // nessuno ha ancora risposto. Per FREE_FOR_ALL resta null → comportamento invariato.
+  const turnBased = resolveTurnConfig(game).turnBased;
   let turnPlayerIdValue: string | null = null;
   let turnPlayerNickname: string | null = null;
-  if (resolveTurnConfig(game).turnBased) {
+  if (turnBased) {
     const players = await prisma.player.findMany({
       where: { gameId },
       orderBy: { joinedAt: "asc" },
@@ -182,13 +183,21 @@ export async function sendNextQuestion(gameId: string): Promise<void> {
   await broadcastToGame(gameId, "game:question", questionData);
 
   if (game.localPartyMode) {
-    const firstActive = await prisma.player.findFirst({
-      where: { gameId, eliminated: false },
-      orderBy: { joinedAt: "asc" },
-    });
+    // Presentatore + "A turno": una sola persona per domanda, a rotazione uniforme
+    // (lo stesso giocatore calcolato per la modalità a turni remota → D0→P1, D1→P2…).
+    // Presentatore + "Tutti contro tutti": si parte dal primo attivo e l'host gira
+    // manualmente fra tutti (comportamento storico invariato).
+    let localTurn: string | null = turnPlayerIdValue;
+    if (!turnBased) {
+      const firstActive = await prisma.player.findFirst({
+        where: { gameId, eliminated: false },
+        orderBy: { joinedAt: "asc" },
+      });
+      localTurn = firstActive?.id ?? null;
+    }
     await prisma.game.update({
       where: { id: gameId },
-      data: { localTurnPlayerId: firstActive?.id ?? null },
+      data: { localTurnPlayerId: localTurn },
     });
     await broadcastToHost(gameId, "game:local-host-info", {
       correctAnswerText: resolveCorrectAnswerText(q),

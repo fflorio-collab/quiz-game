@@ -755,7 +755,14 @@ export default function HostLobbyPage() {
       return a.text.trim().toLowerCase() === localCorrectAnswer.trim().toLowerCase();
     })?.id;
     const activePlayers = players.filter((p) => !p.eliminated);
-    const judgedCount = activePlayers.filter((p) => localJudgments[p.id] !== null && localJudgments[p.id] !== undefined).length;
+    // Modalità "A turno": in presentatore turnPlayerId è valorizzato solo se il gioco
+    // è a turni. In tal caso risponde una sola persona per domanda → mostra solo la
+    // sua riga di giudizio (non quella di tutti, che era fonte di confusione).
+    const turnBasedLocal = !!turnPlayerId;
+    const judgingPlayers = turnBasedLocal && activePlayerId
+      ? activePlayers.filter((p) => p.id === activePlayerId)
+      : activePlayers;
+    const judgedCount = judgingPlayers.filter((p) => localJudgments[p.id] !== null && localJudgments[p.id] !== undefined).length;
     // Ciclo prev/next tra giocatori attivi per il turno
     const activeIdx = activePlayerId ? activePlayers.findIndex((p) => p.id === activePlayerId) : -1;
     const activePlayer = activeIdx >= 0 ? activePlayers[activeIdx] : null;
@@ -898,14 +905,14 @@ export default function HostLobbyPage() {
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-bold">Giudica le risposte</h3>
               <span className="text-xs text-muted">
-                {judgedCount} / {activePlayers.length} giudicati
+                {judgedCount} / {judgingPlayers.length} giudicati
               </span>
             </div>
             {activePlayers.length === 0 ? (
               <p className="text-muted text-center py-4 text-sm">Nessun giocatore in partita.</p>
             ) : (
               <div className="space-y-2">
-                {activePlayers.map((p) => {
+                {judgingPlayers.map((p) => {
                   const j = localJudgments[p.id];
                   const judged = j !== null && j !== undefined;
                   const isActive = activePlayerId === p.id;

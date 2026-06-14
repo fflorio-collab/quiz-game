@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { calculatePoints, streakMultiplier } from "@/lib/utils";
 import { resolveBasePoints } from "@/lib/game-actions";
+import { resolveTurnConfig } from "@/lib/turn";
 import { emitLocalRoundState, broadcastLeaderboard } from "@/lib/game-broadcasts";
 
 // Migrazione vercel-pusher fase 7.3.
@@ -89,25 +90,30 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     });
   }
 
-  // Auto-advance del turno se il giudicato era quello attivo
-  const turnGame = await prisma.game.findUnique({
-    where: { id: gameId },
-    select: { localTurnPlayerId: true },
-  });
-  if (turnGame?.localTurnPlayerId === playerId) {
-    const candidates = await prisma.player.findMany({
-      where: { gameId, eliminated: false },
-      orderBy: { joinedAt: "asc" },
-    });
-    const judged = await prisma.playerAnswer.findMany({
-      where: { gameQuestionId: current.id },
-    });
-    const judgedIds = new Set(judged.map((a) => a.playerId));
-    const next = candidates.find((p) => !judgedIds.has(p.id));
-    await prisma.game.update({
+  // Auto-advance del turno SOLO in "Tutti contro tutti": sulla stessa domanda l'host
+  // gira fra tutti i giocatori (giudicato l'attivo, passa al prossimo non ancora
+  // giudicato). In modalità a turni risponde UNA sola persona per domanda: la
+  // rotazione avanza fra una domanda e l'altra (sendNextQuestion), non qui.
+  if (!resolveTurnConfig(game).turnBased) {
+    const turnGame = await prisma.game.findUnique({
       where: { id: gameId },
-      data: { localTurnPlayerId: next?.id ?? null },
+      select: { localTurnPlayerId: true },
     });
+    if (turnGame?.localTurnPlayerId === playerId) {
+      const candidates = await prisma.player.findMany({
+        where: { gameId, eliminated: false },
+        orderBy: { joinedAt: "asc" },
+      });
+      const judged = await prisma.playerAnswer.findMany({
+        where: { gameQuestionId: current.id },
+      });
+      const judgedIds = new Set(judged.map((a) => a.playerId));
+      const next = candidates.find((p) => !judgedIds.has(p.id));
+      await prisma.game.update({
+        where: { id: gameId },
+        data: { localTurnPlayerId: next?.id ?? null },
+      });
+    }
   }
 
   await emitLocalRoundState(gameId, current.id);
