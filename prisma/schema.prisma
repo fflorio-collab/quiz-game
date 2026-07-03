@@ -253,6 +253,9 @@ model Game {
   localTurnPlayerId       String? // player di turno in modalità presentatore
   revealInProgress        Boolean        @default(false) // lock anti reveal concorrenti
   awaitingCategoryPick    Boolean        @default(false) // griglia categorie attiva, attende host
+  // Token segreto dell'host (rebuild/gameshow): generato alla creazione partita,
+  // richiesto via header x-host-token per le azioni di regia. Null = partite legacy (consentite).
+  hostToken               String?
   players                 Player[]
   spectators              Spectator[]
   gameQuestions           GameQuestion[]

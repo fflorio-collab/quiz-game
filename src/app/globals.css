@@ -1,67 +1,91 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   Tema "Game show TV scuro" — SOLO dark.
+   Font: --font-display (Archivo Black) e --font-sans (Inter) iniettati da
+   next/font in src/app/layout.tsx. Token colore in tailwind.config.ts.
+   Le classi legacy (.btn*, .input, .card, .answer-tile, .apple-link,
+   .chip-gold) DEVONO restare: le usa src/app/admin e i componenti superstiti.
+──────────────────────────────────────────────────────────────────────────── */
+
 @layer base {
   :root {
     color-scheme: dark;
-    --apple-bg: #000000;
-    --apple-surface: #1d1d1f;
-    --apple-surface-2: #2a2a2d;
-    --apple-border: rgba(255, 255, 255, 0.1);
-    --apple-muted: #a1a1a6;
-    --apple-blue: #2997ff;
-    --apple-blue-btn: #0071e3;
-    --apple-blue-btn-hover: #147ce5;
+    --ink: #08080d;
+    --stage: #101018;
+    --panel: #181826;
+    --line: rgba(255, 255, 255, 0.08);
+    --gold: #f6c64b;
+    --gold-bright: #ffdd75;
+    --gold-deep: #8a6a1f;
+    --ember: #ff8a3c;
+    --spark: #4da3ff;
+    --win: #3ddc97;
+    --lose: #ff5c5c;
+    --warn: #ff9f0a;
+    --muted: #9aa0b5;
   }
 
-  html,
+  html {
+    background: var(--ink);
+  }
+
   body {
-    background: var(--apple-bg);
-    color: #f5f5f7;
-    font-family:
-      "Inter",
-      -apple-system,
-      BlinkMacSystemFont,
-      "SF Pro Display",
-      "SF Pro Text",
-      "Helvetica Neue",
-      sans-serif;
+    min-height: 100dvh;
+    /* Vignetta radiale da studio TV: alone caldo in alto, freddo in basso */
+    background:
+      radial-gradient(1100px 700px at 50% -12%, rgba(246, 198, 75, 0.08), transparent 62%),
+      radial-gradient(900px 620px at 88% 112%, rgba(77, 163, 255, 0.06), transparent 58%),
+      radial-gradient(140% 100% at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.5) 100%),
+      var(--ink);
+    background-attachment: fixed;
+    color: #f4f5fa;
+    font-family: var(--font-sans), "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     letter-spacing: -0.003em;
   }
 
   * {
-    @apply border-border;
+    @apply border-line;
   }
 }
 
 @layer components {
+  /* ── Bottoni ─────────────────────────────────────────────────────────── */
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-full px-6 py-3
-           font-medium text-[15px] transition-all duration-200
+           font-semibold text-[15px] transition-all duration-200
            disabled:opacity-40 disabled:cursor-not-allowed
-           focus:outline-none;
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/60;
     letter-spacing: -0.01em;
   }
 
+  /* Primario = oro con testo scuro e glow leggero */
   .btn-primary {
-    @apply btn text-white;
-    background: var(--apple-blue-btn);
+    @apply btn;
+    color: #1a1304;
+    background: linear-gradient(180deg, var(--gold-bright) 0%, var(--gold) 55%, #e0ac2e 100%);
+    box-shadow: 0 0 24px rgba(246, 198, 75, 0.3), 0 2px 10px rgba(0, 0, 0, 0.35);
   }
-  .btn-primary:hover:not(:disabled) { background: var(--apple-blue-btn-hover); }
-  .btn-primary:active:not(:disabled) { background: #0062bd; }
+  .btn-primary:hover:not(:disabled) {
+    background: linear-gradient(180deg, #ffe694 0%, var(--gold-bright) 55%, var(--gold) 100%);
+    box-shadow: 0 0 36px rgba(246, 198, 75, 0.45), 0 2px 10px rgba(0, 0, 0, 0.35);
+  }
+  .btn-primary:active:not(:disabled) {
+    transform: scale(0.98);
+    background: var(--gold);
+  }
 
   .btn-secondary {
     @apply btn text-white;
-    background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.22);
   }
   .btn-secondary:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.1);
     border-color: rgba(255, 255, 255, 0.4);
   }
 
@@ -69,69 +93,117 @@
     @apply btn text-muted hover:text-white;
     background: transparent;
   }
+  .btn-ghost:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.06);
+  }
 
+  /* Pericolo (usato da Button variant="danger") */
+  .btn-danger {
+    @apply btn text-white;
+    background: linear-gradient(180deg, #ff7070 0%, var(--lose) 60%, #d94343 100%);
+    box-shadow: 0 0 20px rgba(255, 92, 92, 0.25), 0 2px 10px rgba(0, 0, 0, 0.35);
+  }
+  .btn-danger:hover:not(:disabled) {
+    box-shadow: 0 0 32px rgba(255, 92, 92, 0.4), 0 2px 10px rgba(0, 0, 0, 0.35);
+    filter: brightness(1.08);
+  }
+  .btn-danger:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  /* ── Form ────────────────────────────────────────────────────────────── */
   .input {
-    @apply w-full rounded-xl px-4 py-3 text-white placeholder:text-[#6e6e73]
+    @apply w-full rounded-xl px-4 py-3 text-white placeholder:text-muted/60
            focus:outline-none transition-all duration-200;
-    background: var(--apple-surface);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--stage);
+    border: 1px solid var(--line);
   }
   .input:focus {
-    border-color: var(--apple-blue);
-    box-shadow: 0 0 0 3px rgba(41, 151, 255, 0.25);
+    border-color: var(--gold);
+    box-shadow: 0 0 0 3px rgba(246, 198, 75, 0.22);
   }
 
+  /* ── Superfici ───────────────────────────────────────────────────────── */
   .card {
-    @apply rounded-[22px] p-6;
-    background: var(--apple-surface);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    @apply rounded-[20px] p-6;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
   }
 
   .answer-tile {
     @apply relative overflow-hidden rounded-2xl p-6 text-left text-lg font-medium
            transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60;
-    background: var(--apple-surface);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--panel);
+    border: 1px solid var(--line);
   }
   .answer-tile:hover:not(:disabled) {
-    background: var(--apple-surface-2);
+    background: #202032;
+    border-color: rgba(246, 198, 75, 0.35);
     transform: scale(1.01);
   }
-  .answer-tile:active:not(:disabled) { transform: scale(0.99); }
-
-  .neon-title {
-    font-family:
-      "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
-    font-weight: 700;
-    letter-spacing: -0.025em;
-    color: #f5f5f7;
-    background: none;
-    -webkit-text-fill-color: currentColor;
-    filter: none;
+  .answer-tile:active:not(:disabled) {
+    transform: scale(0.99);
   }
 
-  .neon-border { border: 1px solid rgba(255, 255, 255, 0.12); }
+  /* ── Testo / link ────────────────────────────────────────────────────── */
+  .apple-link {
+    @apply inline-flex items-center gap-1 font-medium;
+    color: var(--spark);
+  }
+  .apple-link:hover {
+    text-decoration: underline;
+  }
 
   .chip-gold {
     @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1
            text-[11px] font-semibold uppercase tracking-[0.12em];
-    background: transparent;
-    color: var(--apple-blue);
+    color: var(--gold);
+    background: rgba(246, 198, 75, 0.1);
+    border: 1px solid rgba(246, 198, 75, 0.28);
   }
 
-  /* Link Apple-style con freccia */
-  .apple-link {
-    @apply inline-flex items-center gap-1 font-medium;
-    color: var(--apple-blue);
+  /* ── Nuove classi da palco ───────────────────────────────────────────── */
+
+  /* Titolo TV: leggibile da 10 metri */
+  .tv-title {
+    font-family: var(--font-display), "Archivo Black", Impact, sans-serif;
+    font-size: clamp(2.5rem, 6vw, 7rem);
+    line-height: 1.02;
+    letter-spacing: 0.01em;
+    text-transform: uppercase;
+    font-variant-numeric: tabular-nums;
+    color: #f4f5fa;
+    text-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
   }
-  .apple-link:hover { text-decoration: underline; }
+
+  /* Codice partita gigante, spaziatura larga, oro con glow */
+  .code-giant {
+    font-family: var(--font-display), "Archivo Black", Impact, sans-serif;
+    font-size: clamp(3rem, 11vw, 9rem);
+    line-height: 1;
+    letter-spacing: 0.22em;
+    text-indent: 0.22em; /* compensa il letter-spacing sull'ultimo carattere */
+    text-transform: uppercase;
+    font-variant-numeric: tabular-nums;
+    color: var(--gold);
+    text-shadow: 0 0 44px rgba(246, 198, 75, 0.4), 0 4px 20px rgba(0, 0, 0, 0.55);
+  }
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: #0a0a0b; }
+/* ── Scrollbar scura ─────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--ink);
+}
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.12);
   border-radius: 8px;
+  border: 2px solid var(--ink);
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(246, 198, 75, 0.35);
+}
