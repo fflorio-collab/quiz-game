@@ -6,7 +6,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isAdmin } from "@/lib/admin-auth";
-import { auth } from "@/lib/auth";
 import { z } from "zod";
 
 const UpdatePackSchema = z.object({
@@ -19,24 +18,15 @@ const UpdatePackSchema = z.object({
   isPublic: z.boolean().optional(),
 });
 
-// Verifica che il chiamante possa leggere/modificare il pack:
-// - admin: tutto
-// - utente registrato: pack pubblici (read), pack propri (read+write)
-async function authorize(packId: string, write: boolean) {
-  const session = await auth();
-  const userIsAdmin = isAdmin();
-  if (!userIsAdmin && !session?.user?.id) return { ok: false as const, status: 401, error: "Unauthorized" };
+// Solo admin: nel rebuild game-show non esistono account utente.
+// La firma (packId, write) resta invariata per non toccare i call-site.
+async function authorize(packId: string, _write: boolean) {
+  if (!isAdmin()) return { ok: false as const, status: 401, error: "Unauthorized" };
 
   const pack = await prisma.questionPack.findUnique({ where: { id: packId } });
   if (!pack) return { ok: false as const, status: 404, error: "Pack non trovato" };
 
-  if (userIsAdmin) return { ok: true as const, pack, session };
-  if (write) {
-    if (pack.creatorId !== session!.user!.id) return { ok: false as const, status: 403, error: "Non autorizzato" };
-  } else {
-    if (!pack.isPublic && pack.creatorId !== session!.user!.id) return { ok: false as const, status: 403, error: "Non autorizzato" };
-  }
-  return { ok: true as const, pack, session };
+  return { ok: true as const, pack };
 }
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {

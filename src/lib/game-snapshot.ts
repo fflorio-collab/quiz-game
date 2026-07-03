@@ -1,5 +1,4 @@
 import { prisma } from "@/lib/prisma";
-import { loadDuelStateFromDB } from "@/lib/duel-state";
 import { getTypeLabel } from "@/lib/questionTypes";
 import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId, resolveRoundLayout, questionSeq, currentRoundBounds } from "@/lib/turn";
 import { difficultyMultiplier } from "@/lib/utils";
@@ -347,9 +346,6 @@ export async function buildGameStateSnapshotFromDB(
     localPartyMode: game.localPartyMode,
     categoryPickMode: game.categoryPickMode,
   };
-
-  const dbDuel = await loadDuelStateFromDB(gameId);
-  if (dbDuel) snapshot.duel = dbDuel;
 
   if (game.status === "FINISHED") {
     snapshot.finalRanking = players;

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { assertHost } from "@/lib/host-auth";
 import { sendNextQuestion } from "@/lib/game-actions";
 
 // Migrazione vercel-pusher fase 7.4.
@@ -22,6 +23,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!game || !game.jeopardyMode) {
     return NextResponse.json({ error: "Non in modalità Jeopardy" }, { status: 400 });
   }
+  if (!assertHost(req, game)) return NextResponse.json({ error: "Non autorizzato (host)" }, { status: 403 });
   const idx = game.gameQuestions.findIndex((gq) => gq.id === gameQuestionId);
   if (idx < 0) return NextResponse.json({ error: "Cella non trovata" }, { status: 404 });
   if (game.gameQuestions[idx].askedAt) {

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { assertHost } from "@/lib/host-auth";
 import { sendNextQuestion } from "@/lib/game-actions";
 import { currentRoundBounds } from "@/lib/turn";
 
@@ -10,7 +11,7 @@ import { currentRoundBounds } from "@/lib/turn";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: gameId } = await params;
-  const body = (await req.json().catch(() => null)) as { categoryId?: string; difficulty?: string } | null;
+  const body = (await req.json().catch(() => null)) as { categoryId?: string; difficulty?: string; playerId?: string } | null;
   const categoryId = String(body?.categoryId ?? "");
   // Difficoltà opzionale: se presente si pesca una domanda di quella categoria E difficoltà
   // (così l'utente sa quanti punti si gioca). Assente = qualunque difficoltà (retrocompatibile).
@@ -28,6 +29,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   });
   if (!game || !game.categoryPickMode) {
     return NextResponse.json({ error: "Non in modalità \"Scegli categoria\"" }, { status: 400 });
+  }
+  // Autorizzazione "chi sceglie = chi risponde": consentito all'host OPPURE al
+  // giocatore di turno corrente (game.localTurnPlayerId, impostato da emitCategoryGrid).
+  // Un non-host senza playerId coerente col turno → 403.
+  const isHost = assertHost(req, game);
+  const pickerId = body?.playerId ? String(body.playerId) : "";
+  if (!isHost && (!pickerId || pickerId !== game.localTurnPlayerId)) {
+    return NextResponse.json({ error: "Non autorizzato (host o giocatore di turno)" }, { status: 403 });
   }
   // Limita la scelta al round corrente: così chosen.order resta nel blocco-tipo
   // del round e le modalità non si mescolano (no-op nelle partite a round singolo).

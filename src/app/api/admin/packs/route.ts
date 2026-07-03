@@ -8,7 +8,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isAdmin } from "@/lib/admin-auth";
-import { auth } from "@/lib/auth";
 import { z } from "zod";
 
 const CreatePackSchema = z.object({
@@ -23,30 +22,21 @@ const CreatePackSchema = z.object({
 });
 
 export async function GET() {
-  // L'admin vede tutto. Chiunque registrato vede i pubblici + i propri.
-  const session = await auth();
-  if (!isAdmin() && !session?.user?.id) {
+  if (!isAdmin()) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const where = isAdmin()
-    ? {}
-    : { OR: [{ isPublic: true }, { creatorId: session?.user?.id ?? "" }] };
-
   const packs = await prisma.questionPack.findMany({
-    where,
     orderBy: [{ eventDate: "desc" }, { createdAt: "desc" }],
     include: {
       _count: { select: { questions: true } },
-      creator: { select: { id: true, username: true, displayName: true } },
     },
   });
   return NextResponse.json({ packs });
 }
 
 export async function POST(req: Request) {
-  const session = await auth();
-  if (!isAdmin() && !session?.user?.id) {
+  if (!isAdmin()) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -72,7 +62,7 @@ export async function POST(req: Request) {
     data: {
       ...parsed.data,
       eventDate: parsed.data.eventDate ? new Date(parsed.data.eventDate) : null,
-      creatorId: session?.user?.id ?? null,
+      creatorId: null,
     },
   });
   return NextResponse.json({ pack }, { status: 201 });

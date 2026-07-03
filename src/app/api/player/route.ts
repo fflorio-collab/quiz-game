@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { broadcastToGame } from "@/lib/pusher-server";
 import { broadcastLobby } from "@/lib/game-broadcasts";
@@ -24,8 +23,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "code e nickname richiesti" }, { status: 400 });
   }
 
-  const session = await auth();
-  const userId = session?.user && "id" in session.user ? (session.user as { id?: string }).id ?? null : null;
+  // Giocatori sempre anonimi: nessun account utente nel rebuild game-show.
+  const userId = null;
 
   const game = await prisma.game.findUnique({
     where: { code },

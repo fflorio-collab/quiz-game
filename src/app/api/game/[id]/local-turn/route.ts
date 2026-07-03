@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { assertHost } from "@/lib/host-auth";
 import { emitLocalRoundState } from "@/lib/game-broadcasts";
 
 // Migrazione vercel-pusher fase 7.3.
@@ -17,6 +18,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!game || !game.localPartyMode) {
     return NextResponse.json({ error: "Non in modalità presentatore" }, { status: 400 });
   }
+  if (!assertHost(req, game)) return NextResponse.json({ error: "Non autorizzato (host)" }, { status: 403 });
   if (playerId) {
     const player = await prisma.player.findUnique({ where: { id: playerId } });
     if (!player || player.gameId !== gameId || player.eliminated) {

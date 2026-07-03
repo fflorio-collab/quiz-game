@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { assertHost } from "@/lib/host-auth";
 import { handleQuestionEnd } from "@/lib/game-actions";
 import type { QuestionType } from "@/types/socket";
 
@@ -12,7 +13,7 @@ import type { QuestionType } from "@/types/socket";
 // handleQuestionEnd è atomico (revealInProgress lock) → safe contro multiple
 // chiamate concorrenti.
 
-export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: gameId } = await params;
 
   // La domanda "current" è quella con order === currentIndex (ciò che il player vede),
@@ -20,11 +21,12 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   // currentIndex salta e order-desc rivelerebbe un'altra domanda (risposta sbagliata).
   const game = await prisma.game.findUnique({
     where: { id: gameId },
-    select: { currentIndex: true },
+    select: { currentIndex: true, hostToken: true },
   });
   if (!game) {
     return NextResponse.json({ ok: true, noop: true });
   }
+  if (!assertHost(req, game)) return NextResponse.json({ error: "Non autorizzato (host)" }, { status: 403 });
   const current = await prisma.gameQuestion.findFirst({
     where: { gameId, order: game.currentIndex, askedAt: { not: null }, revealedAt: null, awaitingJudgment: false },
     include: { question: { select: { id: true, type: true } } },

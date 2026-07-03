@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { handleTurnDeadline } from "@/lib/game-actions";
-import { loadDuelStateFromDB } from "@/lib/duel-state";
 
 // Migrazione vercel-pusher fase 8.
 // Endpoint di polling: il client lo chiama periodicamente per leggere i timer
@@ -46,14 +45,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     speedrunRemaining = Math.max(0, Math.ceil(game.speedrunDuration - elapsed));
   }
 
-  // Duel state (timer continuo client-side); applica elapsed in lettura.
-  const duel = await loadDuelStateFromDB(gameId);
-
   return NextResponse.json({
     ok: true,
     questionRemaining,
     speedrunRemaining,
-    duel,
     status: game.status,
   });
 }

@@ -1,8 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { broadcastToGame, broadcastToHost } from "@/lib/pusher-server";
 import { describeGameMode } from "@/lib/gameMode";
-import { xpForGame, levelFromXp } from "@/lib/gamification/xp";
-import { evaluateBadgeUnlocks } from "@/lib/gamification/badges";
 import { QUESTION_TYPE_META, getTypeLabel } from "@/lib/questionTypes";
 import { broadcastLobby, emitLocalRoundState } from "@/lib/game-broadcasts";
 import { resolveTimeLimit, buildJudgeAnswersData, buildRevealDataFromDb, buildCategoryCells } from "@/lib/game-snapshot";
@@ -540,10 +538,6 @@ export async function finishGame(gameId: string): Promise<void> {
   });
 
   const gameMode = describeGameMode(game);
-  const sortedPlayers = [...game.players].sort((a, b) => b.score - a.score);
-  const winnerId = sortedPlayers[0]?.id;
-  const podiumIds = new Set(sortedPlayers.slice(0, 3).map((p) => p.id));
-  const nowHour = new Date().getHours();
 
   for (const player of game.players) {
     const correctCount = player.answers.filter((a) => a.isCorrect).length;
@@ -564,76 +558,6 @@ export async function finishGame(gameId: string): Promise<void> {
         userId: player.userId ?? null,
       },
     });
-
-    if (player.userId) {
-      const isWin = player.id === winnerId;
-      const isPodium = podiumIds.has(player.id);
-      const livesRemaining = game.livesAllowed
-        ? Math.max(0, game.livesAllowed - player.wrongCount)
-        : 0;
-      const xpGained = xpForGame({
-        correctAnswers: correctCount,
-        bestStreak: player.bestStreak,
-        isWin,
-        isPodium,
-        livesRemaining,
-        difficulty: game.difficulty,
-      });
-      const userBefore = await prisma.user.findUnique({ where: { id: player.userId } });
-      if (userBefore) {
-        const newXp = userBefore.xp + xpGained;
-        const newLevel = levelFromXp(newXp);
-        const updatedUser = await prisma.user.update({
-          where: { id: player.userId },
-          data: {
-            xp: newXp,
-            level: newLevel,
-            totalGames: userBefore.totalGames + 1,
-            totalWins: userBefore.totalWins + (isWin ? 1 : 0),
-            totalCorrect: userBefore.totalCorrect + correctCount,
-            bestStreak: Math.max(userBefore.bestStreak, player.bestStreak),
-          },
-        });
-        const existing = await prisma.userBadge.findMany({
-          where: { userId: player.userId },
-          include: { badge: true },
-        });
-        const alreadyUnlocked = new Set(existing.map((ub) => ub.badge.slug));
-        const newSlugs = evaluateBadgeUnlocks(
-          {
-            userAfter: {
-              id: updatedUser.id,
-              totalGames: updatedUser.totalGames,
-              totalWins: updatedUser.totalWins,
-              totalCorrect: updatedUser.totalCorrect,
-              bestStreak: updatedUser.bestStreak,
-              dailyStreak: updatedUser.dailyStreak,
-            },
-            gameResult: {
-              correctAnswers: correctCount,
-              totalQuestions: game.totalQuestions,
-              bestStreak: player.bestStreak,
-              isWin,
-              fiftyFiftyUsed: player.fiftyFiftyUsed,
-              skipUsed: player.skipUsed,
-            },
-            alreadyUnlocked,
-          },
-          updatedUser.level,
-          nowHour,
-        );
-        if (newSlugs.length > 0) {
-          const badgesToAward = await prisma.badge.findMany({ where: { slug: { in: newSlugs } } });
-          for (const b of badgesToAward) {
-            try {
-              await prisma.userBadge.create({ data: { userId: player.userId, badgeId: b.id } });
-            } catch {
-              // già assegnato (constraint)
-            }
-          }
-        }
-      }
-    }
   }
 
   // Reset campi runtime persistiti in DB

@@ -5,7 +5,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isAdmin } from "@/lib/admin-auth";
-import { auth } from "@/lib/auth";
 import { z } from "zod";
 
 const Schema = z.object({
@@ -13,15 +12,10 @@ const Schema = z.object({
 });
 
 async function canWrite(packId: string) {
-  const session = await auth();
-  const userIsAdmin = isAdmin();
-  if (!userIsAdmin && !session?.user?.id) return { ok: false as const, status: 401, error: "Unauthorized" };
+  if (!isAdmin()) return { ok: false as const, status: 401, error: "Unauthorized" };
 
   const pack = await prisma.questionPack.findUnique({ where: { id: packId } });
   if (!pack) return { ok: false as const, status: 404, error: "Pack non trovato" };
-  if (!userIsAdmin && pack.creatorId !== session!.user!.id) {
-    return { ok: false as const, status: 403, error: "Non autorizzato" };
-  }
   return { ok: true as const };
 }
 

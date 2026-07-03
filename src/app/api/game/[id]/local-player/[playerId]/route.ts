@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { assertHost } from "@/lib/host-auth";
 import { broadcastLobby } from "@/lib/game-broadcasts";
 
 // Migrazione vercel-pusher fase 7.3.
@@ -7,7 +8,7 @@ import { broadcastLobby } from "@/lib/game-broadcasts";
 // Rimuove un Player dal localPartyMode (presentatore) prima dell'avvio partita.
 
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string; playerId: string }> },
 ) {
   const { id: gameId, playerId } = await params;
@@ -16,6 +17,7 @@ export async function DELETE(
   if (!game || !game.localPartyMode || game.status !== "LOBBY") {
     return NextResponse.json({ error: "Non rimovibile in questo stato" }, { status: 400 });
   }
+  if (!assertHost(req, game)) return NextResponse.json({ error: "Non autorizzato (host)" }, { status: 403 });
   const player = await prisma.player.findUnique({ where: { id: playerId } });
   if (!player || player.gameId !== gameId) {
     return NextResponse.json({ error: "Player non valido" }, { status: 404 });

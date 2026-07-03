@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { assertHost } from "@/lib/host-auth";
 import { calculatePoints } from "@/lib/utils";
 import { resolveBasePoints } from "@/lib/game-actions";
 import { resolveTurnConfig } from "@/lib/turn";
@@ -21,6 +22,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!game || !game.localPartyMode || game.status !== "PLAYING") {
     return NextResponse.json({ error: "Non in modalità presentatore o partita non attiva" }, { status: 400 });
   }
+  if (!assertHost(req, game)) return NextResponse.json({ error: "Non autorizzato (host)" }, { status: 403 });
 
   // Domanda corrente = order === currentIndex (quella mostrata). order-desc attaccava
   // il giudizio a un'altra domanda quando currentIndex salta ("Scegli categoria").

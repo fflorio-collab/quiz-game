@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { generateGameCode, shuffle } from "@/lib/utils";
 import { getTypeLabel } from "@/lib/questionTypes";
@@ -164,9 +165,15 @@ export async function POST(req: Request) {
     ? turnOrder.filter((s) => typeof s === "string" && s.length > 0).join(",")
     : null;
 
+  // Credenziale di regia: chi crea la partita riceve un token segreto che
+  // autentica le azioni host (start/next/judge/…). Il gameId nell'URL dei
+  // player NON basta più per pilotare la partita.
+  const hostToken = randomUUID();
+
   const game = await prisma.game.create({
     data: {
       code,
+      hostToken,
       hostName: hostName ?? null,
       difficulty,
       questionType: modes[0],
@@ -195,5 +202,5 @@ export async function POST(req: Request) {
   });
 
   await broadcastLobby(game.id);
-  return NextResponse.json({ code: game.code, gameId: game.id });
+  return NextResponse.json({ code: game.code, gameId: game.id, hostToken });
 }

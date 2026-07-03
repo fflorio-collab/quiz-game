@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { assertHost } from "@/lib/host-auth";
 import { calculatePoints } from "@/lib/utils";
 import { resolveTimeLimit } from "@/lib/game-snapshot";
 import { resolveBasePoints, revealAnswer } from "@/lib/game-actions";
@@ -44,6 +45,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     },
   });
   if (!game) return NextResponse.json({ error: "Partita non trovata" }, { status: 404 });
+  if (!assertHost(req, game)) return NextResponse.json({ error: "Non autorizzato (host)" }, { status: 403 });
   const gq = game.gameQuestions[0];
   if (!gq) return NextResponse.json({ error: "Domanda non trovata" }, { status: 404 });
 

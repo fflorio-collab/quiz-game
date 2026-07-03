@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { assertHost } from "@/lib/host-auth";
 import { broadcastToGame } from "@/lib/pusher-server";
 import {
   sendNextQuestion,
@@ -23,7 +24,7 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: gameId } = await params;
 
   const game = await prisma.game.findUnique({
@@ -31,6 +32,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     include: { players: true },
   });
   if (!game) return NextResponse.json({ error: "Partita non trovata" }, { status: 404 });
+  if (!assertHost(req, game)) return NextResponse.json({ error: "Non autorizzato (host)" }, { status: 403 });
   if (game.players.length === 0) {
     return NextResponse.json({ error: "Servono almeno 1 giocatore per iniziare" }, { status: 400 });
   }
