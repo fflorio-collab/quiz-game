@@ -1463,7 +1463,8 @@ export default function HostLobbyPage() {
             : `Avvia partita con ${players.length} giocatore${players.length > 1 ? "i" : ""}`}
         </button>
 
-        {players.length >= 2 && (
+        {/* Duello "100 Secondi" nascosto (rimosso per l'evento) */}
+        {false && players.length >= 2 && (
           <button
             onClick={() => { setDuelPickA(players[0]?.id ?? ""); setDuelPickB(players[1]?.id ?? ""); setShowDuelPicker(true); }}
             className="btn-secondary w-full text-base py-3 mt-3"

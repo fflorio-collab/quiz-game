@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { useSession, signOut } from "next-auth/react";
 
 type HostSession = { gameId: string; code: string; hostName?: string };
 type PlayerSession = { gameId: string; playerId: string; code?: string; nickname: string; emoji?: string; avatarUrl?: string };
@@ -51,7 +50,6 @@ const STEPS: { n: string; title: string; desc: string }[] = [
 export default function HomePage() {
   const [host, setHost] = useState<HostSession | null>(null);
   const [player, setPlayer] = useState<PlayerSession | null>(null);
-  const { data: session } = useSession();
 
   useEffect(() => {
     const hGid = localStorage.getItem("hostGameId");
@@ -113,28 +111,6 @@ export default function HomePage() {
             <a href="#features" className="opacity-80 hover:opacity-100 hidden md:inline">Funzionalità</a>
             <a href="#how" className="opacity-80 hover:opacity-100 hidden md:inline">Come funziona</a>
             <Link href="/leaderboard" className="opacity-80 hover:opacity-100">Classifica</Link>
-            <Link href="/pricing" className="opacity-80 hover:opacity-100 hidden md:inline">Pricing</Link>
-            {session?.user ? (
-              <div className="flex items-center gap-3">
-                <Link href="/profile" className="opacity-80 hover:opacity-100 truncate max-w-[120px]">
-                  {session.user.image && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={session.user.image} alt="" className="inline-block w-6 h-6 rounded-full mr-2 align-middle" />
-                  )}
-                  {session.user.name || session.user.email}
-                </Link>
-                <button onClick={() => signOut({ callbackUrl: "/" })} className="opacity-60 hover:opacity-100 text-[12px]">
-                  Esci
-                </button>
-              </div>
-            ) : (
-              <>
-                <Link href="/signin" className="opacity-80 hover:opacity-100">Accedi</Link>
-                <Link href="/signup" className="rounded-full px-3 py-1 text-xs font-medium" style={{ background: APPLE_BLUE, color: "#fff" }}>
-                  Registrati
-                </Link>
-              </>
-            )}
           </div>
         </div>
       </nav>
@@ -502,10 +478,6 @@ export default function HomePage() {
             <Link href="/host" className="hover:underline">Crea partita</Link>
             <Link href="/player" className="hover:underline">Entra con codice</Link>
             <Link href="/spectator" className="hover:underline">Spettatore</Link>
-            <Link href="/signin" className="hover:underline">Accedi</Link>
-            <Link href="/signup" className="hover:underline">Registrati</Link>
-            <Link href="/pricing" className="hover:underline">Pricing</Link>
-            <Link href="/profile" className="hover:underline">Profilo</Link>
           </div>
           <p style={{ color: APPLE_MUTED }}>
             A Fabri Production · Ogni sera è una serata speciale.

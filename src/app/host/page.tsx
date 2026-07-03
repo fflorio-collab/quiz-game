@@ -767,8 +767,8 @@ function RoundEditor({
           <div className="border-t border-border/40 pt-2 space-y-2">
             <p className="text-xs text-muted">Opzioni di gioco (compatibili col tipo selezionato)</p>
 
-            {/* Speedrun */}
-            {compat.speedrun && (
+            {/* Speedrun — nascosto (modalità rimossa per l'evento) */}
+            {false && compat.speedrun && (
               <div>
                 <button type="button"
                   onClick={() => onChange({ speedrun: round.speedrun ? null : 60 })}
@@ -786,8 +786,8 @@ function RoundEditor({
               </div>
             )}
 
-            {/* Lives - Caduta libera */}
-            {compat.lives && (
+            {/* Lives - Caduta libera — nascosto (modalità rimossa per l'evento) */}
+            {false && compat.lives && (
               <div>
                 <button type="button"
                   onClick={() => onChange({ lives: round.lives ? null : 3 })}
@@ -805,8 +805,8 @@ function RoundEditor({
               </div>
             )}
 
-            {/* Last man standing */}
-            {compat.lastManStanding && (
+            {/* Last man standing — nascosto (modalità rimossa per l'evento) */}
+            {false && compat.lastManStanding && (
               <button type="button"
                 onClick={() => onChange({ lastManStanding: !round.lastManStanding })}
                 className={`w-full p-2 rounded border text-left text-xs ${round.lastManStanding ? "border-danger bg-danger/10 text-white" : "border-border text-muted hover:border-muted"}`}>
@@ -832,8 +832,8 @@ function RoundEditor({
               </button>
             )}
 
-            {/* Aiuti — non disponibili in modalità presentatore */}
-            {!localPartyMode && (compat.fiftyFifty || compat.skip) && (
+            {/* Aiuti 50/50 e Salto — nascosti (rimossi per l'evento) */}
+            {false && !localPartyMode && (compat.fiftyFifty || compat.skip) && (
               <div className="grid grid-cols-2 gap-2 pt-1">
                 {compat.fiftyFifty && (
                   <div>
