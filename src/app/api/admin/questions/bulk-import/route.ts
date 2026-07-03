@@ -28,6 +28,8 @@ const QuestionSchema = z.object({
   explanation: z.string().optional().nullable(),
   imageUrl: z.string().optional().nullable(),
   mediaType: z.string().optional().nullable(),
+  mediaAudioOnly: z.boolean().optional(),
+  mediaMaxDuration: z.number().int().min(1).max(3600).optional().nullable(),
   openAnswer: z.string().optional().nullable(),
   wordTemplate: z.string().optional().nullable(),
   // Collegamento categoria: uno dei due (priorità: categoryId, poi categorySlug)
@@ -97,6 +99,8 @@ export async function POST(req: Request) {
           explanation: q.explanation ?? null,
           imageUrl: q.imageUrl ?? null,
           mediaType: q.mediaType ?? null,
+          mediaAudioOnly: q.mediaAudioOnly ?? false,
+          mediaMaxDuration: q.mediaMaxDuration ?? null,
           openAnswer: q.openAnswer ?? null,
           wordTemplate: q.wordTemplate ?? null,
           categoryId,

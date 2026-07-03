@@ -137,7 +137,9 @@ model Question {
   points        Int              @default(100)
   explanation   String? // spiegazione opzionale dopo la risposta
   imageUrl      String? // URL immagine o video allegato alla domanda
-  mediaType     String? // "image" | "video" — tipo del media allegato
+  mediaType     String? // "image" | "video" | "youtube" — tipo del media allegato
+  mediaAudioOnly  Boolean @default(false) // solo YouTube: nascondi il video, mostra player bar audio
+  mediaMaxDuration Int?    // solo YouTube: durata massima di riproduzione in secondi (null = intera)
   openAnswer    String? // risposta attesa per OPEN_ANSWER (confronto automatico case-insensitive)
   wordTemplate  String? // template con _ per lettere mancanti (es. "M_L_NO")
   categoryId    String

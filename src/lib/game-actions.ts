@@ -173,6 +173,8 @@ export async function sendNextQuestion(gameId: string): Promise<void> {
       : undefined,
     imageUrl: q.imageUrl ?? null,
     mediaType: q.mediaType ?? null,
+    mediaAudioOnly: q.mediaAudioOnly ?? false,
+    mediaMaxDuration: q.mediaMaxDuration ?? null,
     wordTemplate: q.wordTemplate ?? null,
     turnPlayerId: turnPlayerIdValue,
     turnPlayerNickname,

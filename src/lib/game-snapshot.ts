@@ -419,6 +419,8 @@ export async function buildGameStateSnapshotFromDB(
       category: q.category ? { name: q.category.name, icon: q.category.icon, color: q.category.color } : undefined,
       imageUrl: q.imageUrl ?? null,
       mediaType: q.mediaType ?? null,
+      mediaAudioOnly: q.mediaAudioOnly ?? false,
+      mediaMaxDuration: q.mediaMaxDuration ?? null,
       wordTemplate: q.wordTemplate ?? null,
     };
     snapshot.currentQuestion = questionPayload;

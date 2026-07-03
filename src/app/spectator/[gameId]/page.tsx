@@ -471,7 +471,7 @@ export default function SpectatorViewerPage() {
 
             {question.imageUrl && (
               <div className="mb-6 flex justify-center">
-                <MediaDisplay imageUrl={question.imageUrl} mediaType={question.mediaType} className="max-h-72 w-full" />
+                <MediaDisplay imageUrl={question.imageUrl} mediaType={question.mediaType} audioOnly={question.mediaAudioOnly} maxDuration={question.mediaMaxDuration} className="max-h-72 w-full" />
               </div>
             )}
 

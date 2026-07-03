@@ -7,6 +7,8 @@ import { z } from "zod";
 const MultipleChoiceSchema = z.object({
   text: z.string().min(5).max(500),
   type: z.literal("MULTIPLE_CHOICE"),
+  mediaAudioOnly: z.boolean().optional(),
+  mediaMaxDuration: z.number().int().min(1).max(3600).optional().nullable(),
   difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
   timeLimit: z.number().int().min(5).max(60).default(20),
   categoryId: z.string(),
@@ -25,6 +27,8 @@ const MultipleChoiceSchema = z.object({
 const OpenAnswerSchema = z.object({
   text: z.string().min(5).max(500),
   type: z.literal("OPEN_ANSWER"),
+  mediaAudioOnly: z.boolean().optional(),
+  mediaMaxDuration: z.number().int().min(1).max(3600).optional().nullable(),
   difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
   timeLimit: z.number().int().min(5).max(60).default(30),
   categoryId: z.string(),
@@ -56,6 +60,8 @@ const WordCompletionSchema = z.object({
 const ImageGuessSchema = z.object({
   text: z.string().min(3).max(500),
   type: z.literal("IMAGE_GUESS"),
+  mediaAudioOnly: z.boolean().optional(),
+  mediaMaxDuration: z.number().int().min(1).max(3600).optional().nullable(),
   difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
   timeLimit: z.number().int().min(5).max(60).default(30),
   categoryId: z.string(),
@@ -70,6 +76,8 @@ const ImageGuessSchema = z.object({
 const GhigliottinaSchema = z.object({
   text: z.string().min(3).max(500),
   type: z.literal("GHIGLIOTTINA"),
+  mediaAudioOnly: z.boolean().optional(),
+  mediaMaxDuration: z.number().int().min(1).max(3600).optional().nullable(),
   difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
   timeLimit: z.number().int().min(5).max(120).default(60),
   categoryId: z.string(),
@@ -85,6 +93,8 @@ const GhigliottinaSchema = z.object({
 const ReactionChainSchema = z.object({
   text: z.string().min(3).max(500),
   type: z.literal("REACTION_CHAIN"),
+  mediaAudioOnly: z.boolean().optional(),
+  mediaMaxDuration: z.number().int().min(1).max(3600).optional().nullable(),
   difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
   timeLimit: z.number().int().min(10).max(60).default(30),
   categoryId: z.string(),
@@ -102,6 +112,8 @@ const ReactionChainSchema = z.object({
 const ClueRevealSchema = z.object({
   text: z.string().min(3).max(500),
   type: z.literal("CLUE_REVEAL"),
+  mediaAudioOnly: z.boolean().optional(),
+  mediaMaxDuration: z.number().int().min(1).max(3600).optional().nullable(),
   difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
   timeLimit: z.number().int().min(10).max(60).default(30),
   categoryId: z.string(),
@@ -117,6 +129,8 @@ const ClueRevealSchema = z.object({
 const OnlyConnectSchema = z.object({
   text: z.string().min(3).max(500),
   type: z.literal("ONLY_CONNECT"),
+  mediaAudioOnly: z.boolean().optional(),
+  mediaMaxDuration: z.number().int().min(1).max(3600).optional().nullable(),
   difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
   timeLimit: z.number().int().min(10).max(120).default(45),
   categoryId: z.string(),

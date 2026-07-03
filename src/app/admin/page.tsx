@@ -35,6 +35,8 @@ type Question = {
   wordTemplate?: string | null;
   imageUrl?: string | null;
   mediaType?: string | null;
+  mediaAudioOnly?: boolean | null;
+  mediaMaxDuration?: number | null;
   category: Category;
   answers: { id: string; text: string; isCorrect: boolean; order: number }[];
   // ID dei pack a cui questa domanda appartiene (popolato da GET /api/admin/questions)
@@ -136,6 +138,8 @@ export default function AdminPage() {
   const [qUploading, setQUploading] = useState(false);
   const [qMediaMode, setQMediaMode] = useState<"upload" | "youtube" | "url">("upload");
   const [qUrlInput, setQUrlInput] = useState("");
+  const [qMediaAudioOnly, setQMediaAudioOnly] = useState(false);
+  const [qMediaMaxDuration, setQMediaMaxDuration] = useState<number | null>(null);
   const [qFormError, setQFormError] = useState("");
   // Campo che ha fallito validazione (per highlight rosso). null = nessun errore di campo.
   const [qFormErrorField, setQFormErrorField] = useState<
@@ -226,7 +230,7 @@ export default function AdminPage() {
     setQText(""); setQType("MULTIPLE_CHOICE"); setQDifficulty("MEDIUM"); setQTimeLimit(20); setQPoints(1000);
     setQAnswers([{ text: "", isCorrect: true }, { text: "", isCorrect: false }, { text: "", isCorrect: false }, { text: "", isCorrect: false }]);
     setQOpenAnswer(""); setQWordTemplate(""); setQClues(["", "", ""]); setQItems(["", "", "", ""]); setQMediaUrl(null); setQMediaType(null);
-    setQMediaMode("upload"); setQUrlInput(""); setQFormError("");
+    setQMediaMode("upload"); setQUrlInput(""); setQMediaAudioOnly(false); setQMediaMaxDuration(null); setQFormError("");
   };
 
   // Apre il form in modalità modifica per una domanda esistente, pre-riempendo
@@ -243,6 +247,8 @@ export default function AdminPage() {
     setQMediaUrl(q.imageUrl ?? null);
     setQMediaType(q.mediaType ?? null);
     setQMediaMode(q.mediaType === "youtube" ? "youtube" : q.imageUrl ? "url" : "upload");
+    setQMediaAudioOnly(q.mediaAudioOnly ?? false);
+    setQMediaMaxDuration(q.mediaMaxDuration ?? null);
     setQUrlInput("");
     setQFormError("");
     // Pre-riempi i campi specifici del tipo
@@ -309,6 +315,9 @@ export default function AdminPage() {
     const body: Record<string, unknown> = {
       text: qText.trim(), type: qType, difficulty: qDifficulty, categoryId: qCategory,
       timeLimit: qTimeLimit, points: qPoints, imageUrl: qMediaUrl, mediaType: qMediaType,
+      // Opzioni YouTube (innocue per gli altri media): solo-audio + cap durata.
+      mediaAudioOnly: qMediaType === "youtube" ? qMediaAudioOnly : false,
+      mediaMaxDuration: qMediaType === "youtube" ? qMediaMaxDuration : null,
     };
     if (qType === "MULTIPLE_CHOICE") body.answers = qAnswers;
     else if (qType === "WORD_COMPLETION") {
@@ -710,11 +719,35 @@ export default function AdminPage() {
 
                     {/* Anteprima media salvato */}
                     {qMediaUrl ? (
-                      <div className="relative inline-block max-w-full w-full">
-                        <MediaDisplay imageUrl={qMediaUrl} mediaType={qMediaType} muted className="max-h-48" />
-                        <button type="button"
-                          onClick={() => { setQMediaUrl(null); setQMediaType(null); setQUrlInput(""); }}
-                          className="absolute top-1 right-1 bg-danger rounded-full w-6 h-6 flex items-center justify-center text-white text-xs font-bold z-10">✕</button>
+                      <div className="space-y-3">
+                        <div className="relative inline-block max-w-full w-full">
+                          <MediaDisplay imageUrl={qMediaUrl} mediaType={qMediaType} muted audioOnly={qMediaAudioOnly} maxDuration={qMediaMaxDuration} className="max-h-48" />
+                          <button type="button"
+                            onClick={() => { setQMediaUrl(null); setQMediaType(null); setQUrlInput(""); setQMediaAudioOnly(false); setQMediaMaxDuration(null); }}
+                            className="absolute top-1 right-1 bg-danger rounded-full w-6 h-6 flex items-center justify-center text-white text-xs font-bold z-10">✕</button>
+                        </div>
+
+                        {/* Opzioni YouTube: solo-audio + durata massima */}
+                        {qMediaType === "youtube" && (
+                          <div className="space-y-3 rounded-xl border border-border p-3">
+                            <label className="flex items-center gap-2 text-sm cursor-pointer">
+                              <input type="checkbox" checked={qMediaAudioOnly}
+                                onChange={(e) => setQMediaAudioOnly(e.target.checked)} className="accent-accent w-4 h-4" />
+                              <span>Solo audio <span className="text-muted text-xs">(nascondi il video, mostra una player bar)</span></span>
+                            </label>
+                            <div>
+                              <label className="flex items-center gap-2 text-sm cursor-pointer mb-1">
+                                <input type="checkbox" checked={qMediaMaxDuration != null}
+                                  onChange={(e) => setQMediaMaxDuration(e.target.checked ? 30 : null)} className="accent-accent w-4 h-4" />
+                                <span>Durata massima{qMediaMaxDuration != null ? <span className="text-accent font-medium">: {qMediaMaxDuration}s</span> : <span className="text-muted text-xs"> (intero video)</span>}</span>
+                              </label>
+                              {qMediaMaxDuration != null && (
+                                <input type="range" min={5} max={300} step={5} value={qMediaMaxDuration}
+                                  onChange={(e) => setQMediaMaxDuration(Number(e.target.value))} className="w-full accent-accent" />
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ) : qMediaMode === "upload" ? (
                       <div>

@@ -833,7 +833,7 @@ export default function PlayPage() {
           </div>
           {question.imageUrl && (
             <div className="flex justify-center mb-4">
-              <MediaDisplay imageUrl={question.imageUrl} mediaType={question.mediaType} className="max-h-40" />
+              <MediaDisplay imageUrl={question.imageUrl} mediaType={question.mediaType} audioOnly={question.mediaAudioOnly} maxDuration={question.mediaMaxDuration} className="max-h-40" />
             </div>
           )}
           {question.questionType === "MULTIPLE_CHOICE" && question.answers.length > 0 && (
@@ -885,7 +885,7 @@ export default function PlayPage() {
           </div>
           {question.imageUrl && (
             <div className="flex justify-center mb-4">
-              <MediaDisplay imageUrl={question.imageUrl} mediaType={question.mediaType} className="max-h-40" />
+              <MediaDisplay imageUrl={question.imageUrl} mediaType={question.mediaType} audioOnly={question.mediaAudioOnly} maxDuration={question.mediaMaxDuration} className="max-h-40" />
             </div>
           )}
           {/* Banner speedrun/vite */}
@@ -949,7 +949,7 @@ export default function PlayPage() {
           </div>
           {question.imageUrl && (
             <div className="flex justify-center mb-4">
-              <MediaDisplay imageUrl={question.imageUrl} mediaType={question.mediaType} className="max-h-40" />
+              <MediaDisplay imageUrl={question.imageUrl} mediaType={question.mediaType} audioOnly={question.mediaAudioOnly} maxDuration={question.mediaMaxDuration} className="max-h-40" />
             </div>
           )}
           <div className="flex-1 flex flex-col gap-4">
@@ -1084,7 +1084,7 @@ export default function PlayPage() {
 
           {question.imageUrl && (
             <div className="mb-4 flex justify-center">
-              <MediaDisplay imageUrl={question.imageUrl} mediaType={question.mediaType} className="max-h-56 w-full" />
+              <MediaDisplay imageUrl={question.imageUrl} mediaType={question.mediaType} audioOnly={question.mediaAudioOnly} maxDuration={question.mediaMaxDuration} className="max-h-56 w-full" />
             </div>
           )}
 

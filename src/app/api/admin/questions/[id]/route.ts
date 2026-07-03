@@ -31,11 +31,12 @@ export async function PUT(
   const body = await req.json();
   const {
     text, type, difficulty, timeLimit, points, answers, openAnswer,
-    imageUrl, mediaType, explanation, wordTemplate,
+    imageUrl, mediaType, mediaAudioOnly, mediaMaxDuration, explanation, wordTemplate,
   } = body as {
     text?: string; type?: string; difficulty?: string; timeLimit?: number;
     points?: number; answers?: AnswerInput[]; openAnswer?: string | null;
     imageUrl?: string | null; mediaType?: string | null;
+    mediaAudioOnly?: boolean | null; mediaMaxDuration?: number | null;
     explanation?: string | null; wordTemplate?: string | null;
   };
 
@@ -82,6 +83,9 @@ export async function PUT(
       openAnswer: meta.requiresOpenAnswer || openAnswer !== undefined ? openAnswer ?? null : null,
       wordTemplate: meta.requiresWordTemplate ? wordTemplate ?? null : null,
       imageUrl, mediaType, explanation,
+      // Solo YouTube; per gli altri media restano default innocui (false / null).
+      mediaAudioOnly: mediaAudioOnly ?? false,
+      mediaMaxDuration: mediaMaxDuration ?? null,
     },
   });
 

@@ -225,7 +225,9 @@ export interface QuestionData {
   totalQuestions: number;
   category?: { name: string; icon?: string | null; color?: string | null };
   imageUrl?: string | null;       // URL immagine o video allegato
-  mediaType?: string | null;      // "image" | "video"
+  mediaType?: string | null;      // "image" | "video" | "youtube"
+  mediaAudioOnly?: boolean | null;  // YouTube: nascondi video, mostra player bar audio
+  mediaMaxDuration?: number | null; // YouTube: durata massima riproduzione (secondi)
   wordTemplate?: string | null;   // per WORD_COMPLETION
   // Modalità a turni: chi è di turno su questa domanda. null/undefined = FREE_FOR_ALL.
   turnPlayerId?: string | null;
