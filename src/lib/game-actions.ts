@@ -289,6 +289,11 @@ export async function handleTurnDeadline(gameId: string): Promise<void> {
     },
   });
   if (!game || game.status !== "PLAYING" || !game.currentQuestionDeadline) return;
+  // Modalità presentatore: allo scadere del tempo NON si rivela in automatico.
+  // Il presentatore assegna i punti a voce e rivela/passa manualmente
+  // ("Rivela risposta →") quando ha finito, così non perde i punti se si distrae.
+  // Il timer resta solo un cronometro visivo.
+  if (game.localPartyMode) return;
   const currentGq = game.gameQuestions[game.currentIndex];
   if (!currentGq || currentGq.revealedAt || currentGq.awaitingJudgment) return;
 
