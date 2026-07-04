@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { usePusherChannel } from "@/lib/pusher-client";
 import { useGameTick } from "@/lib/use-game-tick";
+import { playSound } from "@/lib/sound";
 import type {
   PlayerInfo,
   QuestionData,
@@ -29,6 +30,7 @@ export default function SpectatorViewerPage() {
   const [phase, setPhase] = useState<Phase>("LOBBY");
   const [question, setQuestion] = useState<QuestionData | null>(null);
   const [remaining, setRemaining] = useState(0);
+  const [timeUp, setTimeUp] = useState(false); // "TEMPO SCADUTO" + sirena a 0
   const [reveal, setReveal] = useState<RevealData | null>(null);
   const [answeredPlayerIds, setAnsweredPlayerIds] = useState<Set<string>>(new Set());
   const [finalRanking, setFinalRanking] = useState<PlayerInfo[]>([]);
@@ -64,6 +66,18 @@ export default function SpectatorViewerPage() {
       setSpeedrunRemaining(tick.speedrunRemaining);
     }
   }, [tick, phase, speedrunRemaining]);
+
+  // Sirena + "TEMPO SCADUTO" sul grande schermo quando il countdown arriva a 0.
+  useEffect(() => {
+    if (phase === "QUESTION" && question && question.timeLimit > 0 && remaining === 0) {
+      if (!timeUp) {
+        setTimeUp(true);
+        playSound("timeup");
+      }
+    } else if (timeUp) {
+      setTimeUp(false);
+    }
+  }, [remaining, phase, question, timeUp]);
 
   useEffect(() => {
     const saved = localStorage.getItem("spectatorCode");
@@ -420,6 +434,13 @@ export default function SpectatorViewerPage() {
   if (phase === "QUESTION" && question) {
     return (
       <main className="min-h-screen p-4 md:p-8">
+        {timeUp && (
+          <div className="fixed inset-x-0 top-0 z-[60] flex justify-center pointer-events-none">
+            <div className="mt-4 px-10 py-5 rounded-2xl bg-danger text-white text-3xl md:text-5xl font-extrabold shadow-2xl ring-4 ring-white/20 animate-pulse tracking-wide">
+              ⏰ TEMPO SCADUTO
+            </div>
+          </div>
+        )}
         <div className="max-w-5xl mx-auto grid md:grid-cols-[1fr_280px] gap-6">
           <div>
             {/* Banner speedrun */}

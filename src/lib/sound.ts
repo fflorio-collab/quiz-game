@@ -8,7 +8,7 @@ import { Howl } from "howler";
 
 export type SoundName =
   | "tick" | "correct" | "wrong" | "join" | "start" | "finish"
-  | "lifeline" | "streak" | "wager-win" | "wager-lose" | "countdown";
+  | "lifeline" | "streak" | "wager-win" | "wager-lose" | "countdown" | "timeup";
 
 let howls: Partial<Record<SoundName, Howl>> | null = null;
 const howlAvailable: Partial<Record<SoundName, boolean>> = {};
@@ -37,6 +37,7 @@ function initHowls() {
   register("wager-win", "/sounds/wager-win.mp3", 0.5);
   register("wager-lose", "/sounds/wager-lose.mp3", 0.5);
   register("countdown", "/sounds/countdown.mp3", 0.4);
+  register("timeup", "/sounds/timeup.mp3", 0.6);
   return howls;
 }
 
@@ -67,8 +68,35 @@ function blip(freq: number, durMs: number, type: OscillatorType = "sine", volume
   osc.stop(startAt + durMs / 1000 + 0.02);
 }
 
+// Sirena "tempo scaduto": tono che ondeggia su/giù come una sirena da studio.
+function siren() {
+  const ctx = getCtx();
+  if (!ctx) return;
+  const t0 = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "sawtooth";
+  const lo = 430, hi = 960;
+  osc.frequency.setValueAtTime(lo, t0);
+  gain.gain.setValueAtTime(0.0001, t0);
+  gain.gain.exponentialRampToValueAtTime(0.22, t0 + 0.05);
+  const step = 0.4; // durata di una salita+discesa
+  let t = t0;
+  for (let i = 0; i < 3; i++) {
+    osc.frequency.linearRampToValueAtTime(hi, t + step / 2);
+    osc.frequency.linearRampToValueAtTime(lo, t + step);
+    t += step;
+  }
+  gain.gain.setValueAtTime(0.22, t - 0.08);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t0);
+  osc.stop(t + 0.05);
+}
+
 function synth(name: SoundName) {
   switch (name) {
+    case "timeup":      siren(); break;
     case "tick":        blip(880, 60, "square", 0.08); break;
     case "correct":     blip(523, 120, "sine", 0.12); blip(784, 200, "sine", 0.12, 100); break;                  // C5 → G5
     case "wrong":       blip(200, 150, "sawtooth", 0.15); blip(150, 200, "sawtooth", 0.15, 120); break;

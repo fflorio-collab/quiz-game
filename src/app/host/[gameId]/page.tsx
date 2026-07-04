@@ -35,6 +35,7 @@ export default function HostLobbyPage() {
   const [phase, setPhase] = useState<Phase>("LOBBY");
   const [question, setQuestion] = useState<QuestionData | null>(null);
   const [remaining, setRemaining] = useState(0);
+  const [timeUp, setTimeUp] = useState(false); // "TEMPO SCADUTO" + sirena a 0
   const [reveal, setReveal] = useState<RevealData | null>(null);
   const [answeredCount, setAnsweredCount] = useState(0);
   // Modalità a turni: chi è di turno sulla domanda corrente (null = FREE_FOR_ALL).
@@ -114,6 +115,18 @@ export default function HostLobbyPage() {
     }
     if (tick.duel) setDuel(tick.duel);
   }, [tick, phase, speedrunRemaining]);
+
+  // Sirena + "TEMPO SCADUTO" quando il countdown arriva a 0 durante una domanda.
+  useEffect(() => {
+    if (phase === "QUESTION" && question && question.timeLimit > 0 && remaining === 0) {
+      if (!timeUp) {
+        setTimeUp(true);
+        playSound("timeup");
+      }
+    } else if (timeUp) {
+      setTimeUp(false);
+    }
+  }, [remaining, phase, question, timeUp]);
 
   // Rejoin via POST /api/game/[id]/snapshot (fase 7.4). Recupera anche duel:host-info.
   useEffect(() => {
@@ -814,6 +827,13 @@ export default function HostLobbyPage() {
 
     return (
       <main className="min-h-screen p-4 md:p-8">
+        {timeUp && (
+          <div className="fixed inset-x-0 top-0 z-[60] flex justify-center pointer-events-none">
+            <div className="mt-4 px-8 py-4 rounded-2xl bg-danger text-white text-2xl md:text-4xl font-extrabold shadow-2xl ring-4 ring-white/20 animate-pulse tracking-wide">
+              ⏰ TEMPO SCADUTO
+            </div>
+          </div>
+        )}
         <div className="max-w-5xl mx-auto">
           <div className="flex items-center justify-between mb-4">
             <span className="text-muted">
@@ -1031,6 +1051,13 @@ export default function HostLobbyPage() {
 
     return (
       <main className="min-h-screen p-4 md:p-8">
+        {timeUp && (
+          <div className="fixed inset-x-0 top-0 z-[60] flex justify-center pointer-events-none">
+            <div className="mt-4 px-8 py-4 rounded-2xl bg-danger text-white text-2xl md:text-4xl font-extrabold shadow-2xl ring-4 ring-white/20 animate-pulse tracking-wide">
+              ⏰ TEMPO SCADUTO
+            </div>
+          </div>
+        )}
         <div className="max-w-5xl mx-auto">
           {/* Banner speedrun globale */}
           {speedrunRemaining !== null && (
