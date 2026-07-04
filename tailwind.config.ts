@@ -38,8 +38,14 @@ const config: Config = {
         "neon-flicker": "neonFlicker 2.5s infinite",
         "glow-pulse": "glowPulse 2.4s ease-in-out infinite",
         "float-slow": "floatSlow 6s ease-in-out infinite",
+        "announce-pop": "announcePop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1)",
       },
       keyframes: {
+        announcePop: {
+          "0%": { opacity: "0", transform: "scale(0.5) translateY(30px)" },
+          "60%": { opacity: "1", transform: "scale(1.06) translateY(0)" },
+          "100%": { opacity: "1", transform: "scale(1) translateY(0)" },
+        },
         fadeIn: {
           "0%": { opacity: "0" },
           "100%": { opacity: "1" },

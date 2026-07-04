@@ -227,7 +227,7 @@ export default function AdminPage() {
   // Question CRUD
   const resetQForm = () => {
     setQEditId(null);
-    setQText(""); setQType("MULTIPLE_CHOICE"); setQDifficulty("MEDIUM"); setQTimeLimit(20); setQPoints(1000);
+    setQText(""); setQType("MULTIPLE_CHOICE"); setQDifficulty("MEDIUM"); setQTimeLimit(20); setQPoints(100);
     setQAnswers([{ text: "", isCorrect: true }, { text: "", isCorrect: false }, { text: "", isCorrect: false }, { text: "", isCorrect: false }]);
     setQOpenAnswer(""); setQWordTemplate(""); setQClues(["", "", ""]); setQItems(["", "", "", ""]); setQMediaUrl(null); setQMediaType(null);
     setQMediaMode("upload"); setQUrlInput(""); setQMediaAudioOnly(false); setQMediaMaxDuration(null); setQFormError("");
@@ -243,7 +243,7 @@ export default function AdminPage() {
     setQCategory(q.category.id);
     setQDifficulty((q.difficulty as "EASY" | "MEDIUM" | "HARD") ?? "MEDIUM");
     setQTimeLimit(q.timeLimit);
-    setQPoints(q.points ?? 1000);
+    setQPoints(q.points ?? 100);
     setQMediaUrl(q.imageUrl ?? null);
     setQMediaType(q.mediaType ?? null);
     setQMediaMode(q.mediaType === "youtube" ? "youtube" : q.imageUrl ? "url" : "upload");
@@ -1308,7 +1308,7 @@ function BulkImportTab({ onDone }: { onDone: () => void }) {
       "type": "MULTIPLE_CHOICE",
       "difficulty": "EASY",
       "timeLimit": 20,
-      "points": 1000,
+      "points": 100,
       "categorySlug": "storia",
       "answers": [
         { "text": "Leonardo da Vinci", "isCorrect": true },

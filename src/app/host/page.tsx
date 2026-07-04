@@ -12,10 +12,12 @@ import {
 } from "@/lib/roundsConfig";
 import QuestionPicker from "@/components/QuestionPicker";
 
-type Category = { id: string; name: string; icon?: string | null; color?: string | null; parentId?: string | null; _count?: { questions: number } };
+type Category = { id: string; name: string; icon?: string | null; color?: string | null; parentId?: string | null; _count?: { questions: number }; countByType?: Record<string, number> };
 type CategoryTreeNode = {
   id: string; name: string; slug: string; icon: string | null; color: string | null;
-  parentId: string | null; count: number; totalCount: number; children: CategoryTreeNode[];
+  parentId: string | null; count: number; totalCount: number;
+  countByType?: Record<string, number>; totalCountByType?: Record<string, number>;
+  children: CategoryTreeNode[];
 };
 type Pack = { id: string; name: string; slug: string; icon?: string | null; color?: string | null; isPublic: boolean; _count?: { questions: number } };
 
@@ -150,6 +152,18 @@ export default function HostPage() {
   const toggleCategory = (id: string) => {
     setSelectedCategoryIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
+
+  // Tipo di domanda "attivo" per il conteggio categorie: se tutti i round usano lo stesso
+  // tipo lo usiamo per filtrare i numeri; in torneo con tipi misti mostriamo il totale.
+  const activeType = useMemo<QuestionType | null>(() => {
+    if (rounds.length === 0) return null;
+    const types = new Set(rounds.map((r) => r.type));
+    return types.size === 1 ? rounds[0].type : null;
+  }, [rounds]);
+
+  // Domande disponibili per una categoria: filtrate per tipo attivo, altrimenti totale.
+  const catCount = (node: CategoryTreeNode): number =>
+    activeType ? (node.totalCountByType?.[activeType] ?? 0) : node.totalCount;
 
   // Round operations
   const updateRound = (idx: number, patch: Partial<RoundConfig>) => {
@@ -430,6 +444,11 @@ export default function HostPage() {
               </button>
               {showCategories && (
                 <div className="mt-2 space-y-2">
+                  {activeType && (
+                    <p className="text-[11px] text-muted">
+                      Il numero a destra è quante domande <b>{QUESTION_TYPE_META[activeType].label}</b> ha ogni categoria.
+                    </p>
+                  )}
                   {categoryTree.map((root) => {
                     const allIds = allDescendantIds(root);
                     const selectedChildren = allIds.filter((id) => selectedCategoryIds.includes(id)).length;
@@ -446,7 +465,7 @@ export default function HostPage() {
                             </span>
                             <span>{root.icon}</span>
                             <span className="font-medium text-sm">{root.name}</span>
-                            <span className="text-xs text-muted">({root.totalCount})</span>
+                            <span className={`text-xs ${activeType && catCount(root) === 0 ? "text-danger/70" : "text-muted"}`}>({catCount(root)})</span>
                           </button>
                           {root.children.length > 0 && (
                             <button onClick={() => toggleRoot(root.id)} className="text-muted hover:text-white text-sm px-2">
@@ -466,7 +485,7 @@ export default function HostPage() {
                                   </span>
                                   <span>{sub.icon}</span>
                                   <span className="flex-1 truncate">{sub.name}</span>
-                                  <span className="text-muted text-[11px]">{sub.totalCount}</span>
+                                  <span className={`text-[11px] ${activeType && catCount(sub) === 0 ? "text-danger/70" : "text-muted"}`}>{catCount(sub)}</span>
                                 </button>
                               );
                             })}
@@ -718,8 +737,9 @@ function RoundEditor({
                     onClick={() => onChange({
                       categoryIds: active ? (round.categoryIds ?? []).filter((x) => x !== c.id) : [...(round.categoryIds ?? []), c.id],
                     })}
-                    className={`p-1.5 rounded border text-left text-xs ${active ? "border-accent bg-accent/10 text-white" : "border-border text-muted"}`}>
-                    {c.icon} {c.name}
+                    className={`flex items-center gap-1 p-1.5 rounded border text-left text-xs ${active ? "border-accent bg-accent/10 text-white" : "border-border text-muted"}`}>
+                    <span className="flex-1 truncate">{c.icon} {c.name}</span>
+                    <span className="text-[10px] opacity-70">{c.countByType?.[round.type] ?? 0}</span>
                   </button>
                 );
               })}

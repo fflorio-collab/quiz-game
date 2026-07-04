@@ -141,3 +141,119 @@ export function getSoundEnabled(): boolean {
   if (stored === null) return true;
   return stored === "true";
 }
+
+// ─── Jingle di categoria (cambio round) ───────────────────────────────
+// Nessun MP3 dedicato: sintetizziamo un motivetto breve e allegro. Ogni categoria
+// ottiene un jingle CONSISTENTE (derivato dal nome) con un "mood" scelto in base a
+// parole chiave, così suona un po' "a tema". Per jingle reali basta aggiungere file
+// audio e mapparli qui in futuro.
+
+// Frequenza di una nota espressa in semitoni rispetto ad A4 (440 Hz).
+const noteFreq = (semi: number) => 440 * Math.pow(2, semi / 12);
+
+type Jingle = { pattern: number[]; wave: OscillatorType; step: number; vol: number };
+
+const JINGLES: Record<string, Jingle> = {
+  energetic: { pattern: [3, 3, 10, 3, 10, 15], wave: "square", step: 120, vol: 0.12 },   // grintoso (sport/giochi)
+  fanfare:   { pattern: [3, 7, 10, 15, 10, 15], wave: "square", step: 140, vol: 0.12 },   // trionfale (cinema/tv)
+  melodic:   { pattern: [3, 5, 7, 8, 10, 12, 15], wave: "triangle", step: 145, vol: 0.14 }, // melodico (musica)
+  regal:     { pattern: [7, 7, 10, 15, 14, 15], wave: "sine", step: 180, vol: 0.16 },     // solenne (storia/arte)
+  quirky:    { pattern: [3, 10, 7, 14, 10, 17], wave: "triangle", step: 115, vol: 0.13 }, // saltellante (scienza/natura)
+  playful:   { pattern: [8, 3, 8, 12, 8, 15, 19], wave: "square", step: 110, vol: 0.11 }, // giocoso (cibo/varie)
+};
+
+// Parola chiave (contenuta nel nome categoria, lowercase) → mood.
+const MOOD_KEYWORDS: Array<[string[], keyof typeof JINGLES]> = [
+  [["sport", "calcio", "motor", "moto", "auto", "gioch", "videogioch", "esport", "fitness", "olimp"], "energetic"],
+  [["cinema", "film", "tv", "serie", "spettacol", "attore", "hollywood", "oscar", "cartoni"], "fanfare"],
+  [["music", "canz", "rock", "pop", "cantant", "band", "concert", "rap", "jazz"], "melodic"],
+  [["stor", "arte", "letter", "geograf", "mondo", "mitolog", "cultura", "monument"], "regal"],
+  [["scienz", "tecnolog", "natura", "animal", "spazio", "biolog", "chimic", "fisic", "matemat", "informat"], "quirky"],
+  [["cibo", "cucina", "food", "gastro", "vino", "ricett", "varie", "misto", "general"], "playful"],
+];
+
+function hashStr(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+// Jingle MP3 dedicati (opzionali): se metti un file in
+//   public/sounds/jingles/<slug>.mp3
+// (slug = nome categoria minuscolo, senza accenti, spazi→trattino, es. "Cinema e TV"
+// → "cinema-e-tv"), quello sostituisce il jingle sintetizzato per quella categoria.
+// Se il file manca, si ricade automaticamente sulla sintesi.
+const categoryHowls: Record<string, Howl> = {};
+const categoryHowlState: Record<string, "loading" | "ready" | "error"> = {};
+
+function jingleSlug(name: string): string {
+  return (name || "")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "") // via accenti
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function ensureCategoryHowl(slug: string): Howl | null {
+  if (!slug) return null;
+  if (categoryHowls[slug]) return categoryHowls[slug];
+  const h = new Howl({
+    src: [`/sounds/jingles/${slug}.mp3`],
+    volume: 0.6,
+    onload: () => { categoryHowlState[slug] = "ready"; },
+    onloaderror: () => { categoryHowlState[slug] = "error"; },
+  });
+  categoryHowls[slug] = h;
+  categoryHowlState[slug] = "loading";
+  return h;
+}
+
+// Precarica l'eventuale MP3 di una categoria (chiamalo appena sai quale round arriva,
+// così il file è pronto quando parte lo splash). Innocuo se il file non esiste.
+export function preloadCategoryJingle(categoryName: string) {
+  if (typeof window === "undefined") return;
+  try { ensureCategoryHowl(jingleSlug(categoryName)); } catch { /* noop */ }
+}
+
+// Riproduce il jingle "a tema" per una categoria. Priorità all'MP3 dedicato (se
+// presente e già caricato); altrimenti sintesi. Il mood della sintesi è scelto da
+// parole chiave, con fallback deterministico dal nome (stessa categoria → stesso motivo).
+export function playCategoryJingle(categoryName: string) {
+  if (!enabled) return;
+  if (typeof window === "undefined") return;
+  try {
+    // 1) MP3 dedicato già caricato → usalo.
+    const slug = jingleSlug(categoryName);
+    const howl = ensureCategoryHowl(slug);
+    if (howl && categoryHowlState[slug] === "ready") { howl.play(); return; }
+    // 2) Fallback: jingle sintetizzato (sempre disponibile).
+    const ctx = getCtx();
+    if (!ctx) return;
+    const key = (categoryName || "").toLowerCase();
+    let mood: keyof typeof JINGLES | null = null;
+    for (const [words, m] of MOOD_KEYWORDS) {
+      if (words.some((w) => key.includes(w))) { mood = m; break; }
+    }
+    const hash = hashStr(key || "x");
+    if (!mood) {
+      const moods = Object.keys(JINGLES) as Array<keyof typeof JINGLES>;
+      mood = moods[hash % moods.length];
+    }
+    const j = JINGLES[mood];
+    // Trasposizione consistente: differenzia categorie con lo stesso mood restando
+    // musicali (solo toni interi, nessuna nota "stonata").
+    const transpose = [0, 0, -2, 2, 3, 5][hash % 6];
+    // Basso iniziale che dà "spinta".
+    blip(noteFreq(j.pattern[0] + transpose - 12), j.step * 1.4, "sine", j.vol * 1.1, 0);
+    j.pattern.forEach((semi, i) => {
+      blip(noteFreq(semi + transpose), j.step * 0.92, j.wave, j.vol, i * j.step);
+    });
+    // Sparkle finale (due note acute).
+    const end = j.pattern.length * j.step;
+    const last = j.pattern[j.pattern.length - 1] + transpose;
+    blip(noteFreq(last + 12), 240, "sine", j.vol * 0.9, end + 20);
+    blip(noteFreq(last + 19), 320, "sine", j.vol * 0.8, end + 160);
+  } catch {
+    // Silent fail
+  }
+}

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { usePusherChannel } from "@/lib/pusher-client";
 import { useGameTick } from "@/lib/use-game-tick";
-import { playSound } from "@/lib/sound";
+import { playSound, preloadCategoryJingle } from "@/lib/sound";
 import type {
   PlayerInfo,
   QuestionData,
@@ -13,6 +13,12 @@ import type {
   CategoryGridData,
 } from "@/types/socket";
 import MediaDisplay from "@/components/MediaDisplay";
+import TurnAnnounce, { type AnnouncePlayer } from "@/components/TurnAnnounce";
+import CategoryRevealSplash from "@/components/CategoryRevealSplash";
+
+// Splash cambio round sul grande schermo spettatori (sempre "over": la domanda è già
+// arrivata, lo splash la copre per qualche secondo e poi la rivela).
+type SpectatorSplash = { category: { name: string; color?: string | null; icon?: string | null }; roundNumber: number; totalRounds: number; modeLabel: string };
 
 type Phase = "LOBBY" | "QUESTION" | "REVEAL" | "FINISHED" | "CATEGORY_PICK";
 
@@ -40,6 +46,11 @@ export default function SpectatorViewerPage() {
   const [localJudgments, setLocalJudgments] = useState<Record<string, boolean | null>>({});
   const [categoryGrid, setCategoryGrid] = useState<CategoryGridData | null>(null);
   const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
+  // Annuncio "Tocca a te" a tutto schermo prima della domanda.
+  const [announce, setAnnounce] = useState<AnnouncePlayer | null>(null);
+  const announcedQnRef = useRef<number | null>(null);
+  // Splash cambio round (categoria singola): nome categoria + jingle a tema.
+  const [splash, setSplash] = useState<SpectatorSplash | null>(null);
 
   // Countdown locale 1s tra un tick e l'altro per animazione fluida; la verità
   // (vedi sotto) la sovrascrive dal server ogni 2s.
@@ -48,7 +59,11 @@ export default function SpectatorViewerPage() {
     if (tickRef.current) clearInterval(tickRef.current);
     if (phase !== "QUESTION" || !question || question.timeLimit <= 0) return;
     tickRef.current = setInterval(() => {
-      setRemaining((r) => (r > 0 ? r - 1 : 0));
+      setRemaining((r) => {
+        const next = r > 0 ? r - 1 : 0;
+        if (next > 0 && next <= 5) playSound("tick"); // tic-tac ultimi 5s sul grande schermo
+        return next;
+      });
     }, 1000);
     return () => {
       if (tickRef.current) clearInterval(tickRef.current);
@@ -83,6 +98,24 @@ export default function SpectatorViewerPage() {
     const saved = localStorage.getItem("spectatorCode");
     if (saved) setCode(saved);
   }, []);
+
+  // Annuncio "Tocca a te": una volta per domanda, quando è noto il giocatore di turno
+  // (presentatore: activePlayerId; a-turni / "chi sceglie=chi risponde": turnPlayerId).
+  useEffect(() => {
+    if (phase !== "QUESTION" || !question) return;
+    const qn = question.questionNumber;
+    if (announcedQnRef.current === qn) return;
+    const turnId = activePlayerId ?? question.turnPlayerId ?? null;
+    if (!turnId) return; // FREE_FOR_ALL o turno non ancora risolto → nessun annuncio
+    const p = players.find((x) => x.id === turnId);
+    announcedQnRef.current = qn;
+    setAnnounce({
+      nickname: p?.nickname ?? question.turnPlayerNickname ?? "",
+      emoji: p?.emoji,
+      avatarUrl: p?.avatarUrl,
+    });
+    playSound("start");
+  }, [phase, question, activePlayerId, players]);
 
   // Rejoin: POST /api/spectator (fase 7.1) per recuperare lo snapshot iniziale.
   useEffect(() => {
@@ -129,6 +162,8 @@ export default function SpectatorViewerPage() {
           setPhase("REVEAL");
         } else if (s.currentQuestion) {
           setQuestion(s.currentQuestion);
+          // Ricongiungendosi a domanda in corso non riproporre l'annuncio a tutto schermo.
+          announcedQnRef.current = s.currentQuestion.questionNumber ?? null;
           setRemaining(s.remainingTime ?? s.currentQuestion.timeLimit);
           setReveal(null);
           setPhase("QUESTION");
@@ -157,8 +192,14 @@ export default function SpectatorViewerPage() {
       setAnsweredPlayerIds(new Set());
       setRemaining(q.timeLimit);
       setLocalJudgments({});
+      // Azzera il turno "presentatore": lo ripopola game:local-state con il valore per
+      // la NUOVA domanda, così l'annuncio non mostra quello della domanda precedente.
+      setActivePlayerId(null);
       setPhase("QUESTION");
       setCategoryGrid(null);
+      // Prima domanda di un round a categoria singola → splash animato + jingle sul
+      // grande schermo (vale per tutti i round, round 1 incluso). Poi rivela la domanda.
+      setSplash(q.roundIntro ? { ...q.roundIntro } : null);
     };
     const onAnswerReceived = ({ playerId }: { playerId: string }) => {
       setAnsweredPlayerIds((prev) => {
@@ -167,7 +208,12 @@ export default function SpectatorViewerPage() {
         return next;
       });
     };
-    const onReveal = (data: RevealData) => { setReveal(data); setPhase("REVEAL"); };
+    const onReveal = (data: RevealData) => {
+      // Precarica l'eventuale MP3 della categoria in arrivo (pronto per lo splash).
+      if (data.nextRound?.category) preloadCategoryJingle(data.nextRound.category.name);
+      setReveal(data);
+      setPhase("REVEAL");
+    };
     const onLeaderboard = ({ players }: { players: PlayerInfo[] }) => setPlayers(players);
     const onFinished = ({ players }: { players: PlayerInfo[] }) => {
       setFinalRanking(players);
@@ -215,6 +261,19 @@ export default function SpectatorViewerPage() {
   };
 
   // ========== RENDER ==========
+
+  // Splash cambio round (categoria singola): copre lo schermo, poi rivela la domanda.
+  if (splash) {
+    return (
+      <CategoryRevealSplash
+        category={splash.category}
+        roundNumber={splash.roundNumber}
+        totalRounds={splash.totalRounds}
+        modeLabel={splash.modeLabel}
+        onDone={() => setSplash(null)}
+      />
+    );
+  }
 
   if (phase === "FINISHED") {
     return (
@@ -434,6 +493,7 @@ export default function SpectatorViewerPage() {
   if (phase === "QUESTION" && question) {
     return (
       <main className="min-h-screen p-4 md:p-8">
+        {announce && <TurnAnnounce player={announce} onDone={() => setAnnounce(null)} />}
         {timeUp && (
           <div className="fixed inset-x-0 top-0 z-[60] flex justify-center pointer-events-none">
             <div className="mt-4 px-10 py-5 rounded-2xl bg-danger text-white text-3xl md:text-5xl font-extrabold shadow-2xl ring-4 ring-white/20 animate-pulse tracking-wide">

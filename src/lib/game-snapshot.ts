@@ -2,7 +2,6 @@ import { prisma } from "@/lib/prisma";
 import { loadDuelStateFromDB } from "@/lib/duel-state";
 import { getTypeLabel } from "@/lib/questionTypes";
 import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId, resolveRoundLayout, questionSeq, currentRoundBounds } from "@/lib/turn";
-import { difficultyMultiplier } from "@/lib/utils";
 import type {
   GameStateSnapshot,
   PlayerInfo,
@@ -128,7 +127,7 @@ export async function buildRevealDataFromDb(gameQuestionId: string): Promise<Rev
       playerAnswers: { include: { player: true } },
       game: {
         include: {
-          gameQuestions: { include: { question: true }, orderBy: { order: "asc" } },
+          gameQuestions: { include: { question: { include: { category: true } } }, orderBy: { order: "asc" } },
         },
       },
     },
@@ -154,11 +153,25 @@ export async function buildRevealDataFromDb(gameQuestionId: string): Promise<Rev
         .every((g) => g.askedAt != null);
       if (roundComplete && roundOfQuestion < roundCount - 1) {
         const nextModeType = roundTypes[roundOfQuestion + 1];
+        // Categoria del prossimo round: se TUTTE le sue domande appartengono a
+        // un'unica categoria, la annunciamo con lo splash animato + jingle sul
+        // presentatore. Derivata dalle domande reali del round (robusta: vale anche
+        // senza roundsConfig e riflette ciò che verrà effettivamente giocato).
+        const nlo = (roundOfQuestion + 1) * perRound;
+        const nhi = (roundOfQuestion + 2) * perRound;
+        const nextCats = new Map<string, { name: string; color: string | null; icon: string | null }>();
+        for (const g of gq.game.gameQuestions) {
+          if (g.order < nlo || g.order >= nhi) continue;
+          const c = g.question.category;
+          if (c) nextCats.set(c.id, { name: c.name, color: c.color, icon: c.icon });
+        }
+        const singleCat = nextCats.size === 1 ? Array.from(nextCats.values())[0] : undefined;
         nextRound = {
           modeType: nextModeType,
           modeLabel: getTypeLabel(nextModeType),
           roundNumber: roundOfQuestion + 2,
           totalRounds: roundCount,
+          ...(singleCat ? { category: singleCat } : {}),
         };
       }
     }
@@ -234,11 +247,12 @@ async function buildJeopardyGridFromDb(gameId: string): Promise<JeopardyGridData
   return { cells };
 }
 
-// Ordine di visualizzazione delle difficoltà (punti crescenti).
+// Ordine di visualizzazione delle difficoltà (dal più facile al più difficile).
 const DIFFICULTY_ORDER = ["EASY", "MEDIUM", "HARD"];
 
 // Costruisce le celle categoria della griglia "Scegli categoria", suddivise per
-// difficoltà con i punti in palio (base × moltiplicatore). Scope al round corrente.
+// difficoltà con i punti in palio (= base della domanda, o override di round; la
+// difficoltà non cambia i punti). Scope al round corrente.
 // Unica sorgente condivisa tra la broadcast live (emitCategoryGrid) e lo snapshot,
 // così non possono divergere.
 export function buildCategoryCells(
@@ -284,7 +298,7 @@ export function buildCategoryCells(
     cell.total += 1;
     const d = gq.question.difficulty;
     if (!cell.byDiff.has(d)) {
-      cell.byDiff.set(d, { count: 0, points: Math.round(baseFor(gq.question.points) * difficultyMultiplier(d)) });
+      cell.byDiff.set(d, { count: 0, points: baseFor(gq.question.points) });
     }
     cell.byDiff.get(d)!.count += 1;
   }

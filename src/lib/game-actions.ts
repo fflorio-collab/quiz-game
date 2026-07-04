@@ -6,7 +6,7 @@ import { evaluateBadgeUnlocks } from "@/lib/gamification/badges";
 import { QUESTION_TYPE_META, getTypeLabel } from "@/lib/questionTypes";
 import { broadcastLobby, emitLocalRoundState } from "@/lib/game-broadcasts";
 import { resolveTimeLimit, buildJudgeAnswersData, buildRevealDataFromDb, buildCategoryCells } from "@/lib/game-snapshot";
-import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId, questionSeq } from "@/lib/turn";
+import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId, questionSeq, resolveRoundLayout } from "@/lib/turn";
 import type { QuestionType } from "@/types/socket";
 
 function shuffle<T>(arr: T[]): T[] {
@@ -159,6 +159,46 @@ export async function sendNextQuestion(gameId: string): Promise<void> {
     turnPlayerNickname = players.find((p) => p.id === turnPlayerIdValue)?.nickname ?? null;
   }
 
+  // Round intro: splash "categoria + jingle" sui grandi schermi quando questa è la
+  // PRIMA domanda di un round a categoria singola (round 1 incluso). Solo per partite
+  // con struttura a round; derivato dalle domande reali del round.
+  let roundIntro: {
+    category: { name: string; color: string | null; icon: string | null };
+    roundNumber: number;
+    totalRounds: number;
+    modeLabel: string;
+  } | undefined;
+  {
+    const layout = resolveRoundLayout(game);
+    if (layout) {
+      const { roundTypes, roundCount, perRound } = layout;
+      const roundOfQ = Math.min(roundCount - 1, Math.floor(gq.order / perRound));
+      const lo = roundOfQ * perRound;
+      const hi = (roundOfQ + 1) * perRound;
+      // Prima domanda estratta del round? (la corrente è già askedAt su DB ma NON in
+      // memoria → se nessun'altra del round ha askedAt, questa è la prima).
+      const askedBefore = game.gameQuestions.filter(
+        (g) => g.order >= lo && g.order < hi && g.id !== gq.id && g.askedAt,
+      ).length;
+      if (askedBefore === 0) {
+        const cats = new Map<string, { name: string; color: string | null; icon: string | null }>();
+        for (const g of game.gameQuestions) {
+          if (g.order < lo || g.order >= hi) continue;
+          const c = g.question.category;
+          if (c) cats.set(c.id, { name: c.name, color: c.color, icon: c.icon });
+        }
+        if (cats.size === 1) {
+          roundIntro = {
+            category: Array.from(cats.values())[0],
+            roundNumber: roundOfQ + 1,
+            totalRounds: roundCount,
+            modeLabel: getTypeLabel(roundTypes[roundOfQ]),
+          };
+        }
+      }
+    }
+  }
+
   const questionData = {
     questionId: q.id,
     gameQuestionId: gq.id,
@@ -178,6 +218,7 @@ export async function sendNextQuestion(gameId: string): Promise<void> {
     wordTemplate: q.wordTemplate ?? null,
     turnPlayerId: turnPlayerIdValue,
     turnPlayerNickname,
+    roundIntro,
   };
 
   await clearRevealDb(gameId);

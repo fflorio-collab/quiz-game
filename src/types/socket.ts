@@ -232,6 +232,15 @@ export interface QuestionData {
   // Modalità a turni: chi è di turno su questa domanda. null/undefined = FREE_FOR_ALL.
   turnPlayerId?: string | null;
   turnPlayerNickname?: string | null;
+  // Presente SOLO sulla PRIMA domanda di un round a categoria singola: i grandi schermi
+  // (presentatore/spettatori) mostrano lo splash animato "categoria + jingle" prima di
+  // rivelare la domanda. Copre anche il round 1 (dove non c'è il pulsante "Inizia round").
+  roundIntro?: {
+    category: { name: string; color?: string | null; icon?: string | null };
+    roundNumber: number;
+    totalRounds: number;
+    modeLabel: string;
+  };
 }
 
 export interface RevealData {
@@ -251,6 +260,10 @@ export interface RevealData {
     modeLabel: string;
     roundNumber: number;          // 2 = secondo round, 3 = terzo...
     totalRounds: number;
+    // Valorizzato SOLO se il prossimo round è a categoria singola (tutte le sue
+    // domande sono della stessa categoria): il presentatore mostra lo splash
+    // animato "nome categoria + jingle" prima di servire la prima domanda.
+    category?: { name: string; color?: string | null; icon?: string | null };
   };
 }
 
@@ -281,8 +294,8 @@ export interface CategoryGridData {
     icon?: string | null;
     color?: string | null;
     remaining: number; // domande ancora disponibili in questa categoria per la partita
-    // Suddivisione per difficoltà (round corrente): per scegliere categoria + difficoltà
-    // e vedere i punti in palio. points = base × moltiplicatore (Facile 50 / Medio 100 / Difficile 200).
+    // Suddivisione per difficoltà (round corrente): per scegliere categoria + difficoltà.
+    // points = base della domanda (o override di round); la difficoltà non cambia i punti.
     difficulties?: Array<{ difficulty: string; remaining: number; points: number }>;
   }>;
   // Modalità a turni: chi sceglierà la categoria = chi risponderà alla prossima

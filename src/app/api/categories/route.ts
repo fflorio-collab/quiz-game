@@ -17,6 +17,19 @@ export async function GET() {
     _count: { _all: true },
   });
 
+  // Conteggi per categoria × tipo (per mostrare, in setup, quante domande di uno
+  // specifico tipo — es. MULTIPLE_CHOICE — sono disponibili per ogni categoria).
+  const perCategoryType = await prisma.question.groupBy({
+    by: ["categoryId", "type"],
+    _count: { _all: true },
+  });
+  const byCatType = new Map<string, Record<string, number>>();
+  for (const row of perCategoryType) {
+    const m = byCatType.get(row.categoryId) ?? {};
+    m[row.type] = row._count._all;
+    byCatType.set(row.categoryId, m);
+  }
+
   // Costruzione albero: root (parentId null) → children
   type CatRow = (typeof all)[number];
   type Node = {
@@ -28,10 +41,13 @@ export async function GET() {
     parentId: string | null;
     count: number;          // domande direttamente in questa categoria
     totalCount: number;     // domande qui + in tutte le discendenti
+    countByType: Record<string, number>;       // domande dirette, per tipo
+    totalCountByType: Record<string, number>;  // domande qui + discendenti, per tipo
     children: Node[];
   };
   const byId = new Map<string, Node>();
   for (const c of all) {
+    const ct = byCatType.get(c.id) ?? {};
     byId.set(c.id, {
       id: c.id,
       name: c.name,
@@ -41,6 +57,8 @@ export async function GET() {
       parentId: c.parentId,
       count: c._count.questions,
       totalCount: c._count.questions,
+      countByType: { ...ct },
+      totalCountByType: { ...ct },
       children: [],
     });
   }
@@ -53,19 +71,26 @@ export async function GET() {
       roots.push(node);
     }
   }
-  // Propaga totalCount su root sommando figli
+  // Propaga totalCount (globale e per tipo) su root sommando i figli
   for (const root of roots) {
-    const sumChildren = (n: Node): number => {
+    const aggregate = (n: Node): { total: number; byType: Record<string, number> } => {
       let s = n.count;
-      for (const ch of n.children) s += sumChildren(ch);
+      const bt: Record<string, number> = { ...n.countByType };
+      for (const ch of n.children) {
+        const res = aggregate(ch);
+        s += res.total;
+        for (const [t, v] of Object.entries(res.byType)) bt[t] = (bt[t] ?? 0) + v;
+      }
       n.totalCount = s;
-      return s;
+      n.totalCountByType = bt;
+      return { total: s, byType: bt };
     };
-    sumChildren(root);
+    aggregate(root);
   }
 
   return NextResponse.json({
-    categories: all, // retrocompat: lista flat
+    // retrocompat: lista flat, arricchita con i conteggi diretti per tipo
+    categories: all.map((c) => ({ ...c, countByType: byCatType.get(c.id) ?? {} })),
     tree: roots,      // nuovo: albero gerarchico con totalCount
     counts: countsByType.map((c: { type: string; difficulty: string; _count: { _all: number } }) => ({
       type: c.type,

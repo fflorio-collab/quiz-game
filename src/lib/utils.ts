@@ -15,16 +15,6 @@ export function generateGameCode(): string {
   return code;
 }
 
-// Moltiplicatore punti in base alla difficoltà
-export function difficultyMultiplier(difficulty: string): number {
-  switch (difficulty) {
-    case "EASY":   return 0.5;
-    case "HARD":   return 2.0;
-    case "MEDIUM":
-    default:       return 1.0;
-  }
-}
-
 // Moltiplicatore punti da streak (risposte corrette consecutive).
 // La streak passata è il numero DOPO l'incremento (es. 1 = prima risposta della serie).
 export function streakMultiplier(streak: number): number {
@@ -35,19 +25,20 @@ export function streakMultiplier(streak: number): number {
   return 1.0;
 }
 
-// Punti = base × moltiplicatore difficoltà (EASY 0.5 / MEDIUM 1 / HARD 2).
-// Niente bonus tempo, niente bonus streak: punteggio piatto e prevedibile
-// (base 100 → 50 / 100 / 200). I parametri timeTaken/timeLimit restano nella
-// firma per non toccare i call site, ma vengono ignorati.
+// Punti = base della domanda (o override di round nei tornei / valore cella Jeopardy).
+// Nessun moltiplicatore difficoltà: tutte le domande valgono uguale, a meno di un
+// override di round. Niente bonus tempo, niente bonus streak: punteggio piatto e
+// prevedibile. I parametri timeTaken/timeLimit/difficulty restano nella firma per non
+// toccare i call site, ma vengono ignorati.
 export function calculatePoints(
   _timeTakenMs: number,
   _timeLimitMs: number,
   isCorrect: boolean,
   basePoints: number = 100,
-  difficulty: string = "MEDIUM"
+  _difficulty: string = "MEDIUM"
 ): number {
   if (!isCorrect) return 0;
-  return Math.round(basePoints * difficultyMultiplier(difficulty));
+  return basePoints;
 }
 
 // Mischia un array (Fisher-Yates)

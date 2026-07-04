@@ -56,7 +56,7 @@ export type RoundsConfig = RoundConfig[];
 
 // Min/max round del torneo (deciso con KING 10/05/2026).
 export const TOURNAMENT_MIN_ROUNDS = 2;
-export const TOURNAMENT_MAX_ROUNDS = 15;
+export const TOURNAMENT_MAX_ROUNDS = 20;
 
 // Serializzazione/parsing centralizzati.
 // Tolleranti: roundsConfig vuoto/malformato → null (la partita ricade sui campi legacy).

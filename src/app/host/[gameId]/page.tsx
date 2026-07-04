@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { usePusherChannel } from "@/lib/pusher-client";
 import { useGameTick } from "@/lib/use-game-tick";
-import { playSound } from "@/lib/sound";
+import { playSound, preloadCategoryJingle } from "@/lib/sound";
 import type {
   PlayerInfo,
   QuestionData,
@@ -16,8 +16,22 @@ import type {
   CategoryGridData,
 } from "@/types/socket";
 import MediaDisplay from "@/components/MediaDisplay";
+import TurnAnnounce, { type AnnouncePlayer } from "@/components/TurnAnnounce";
+import CategoryRevealSplash from "@/components/CategoryRevealSplash";
 
 type Phase = "LOBBY" | "QUESTION" | "JUDGING" | "REVEAL" | "FINISHED" | "JEOPARDY_GRID" | "CATEGORY_PICK";
+
+// Splash cambio round: dati della categoria singola del prossimo round da annunciare.
+type SplashData = {
+  category: { name: string; color?: string | null; icon?: string | null };
+  roundNumber: number;
+  totalRounds: number;
+  modeLabel: string;
+  // "before": lo splash precede la domanda (pulsante "Inizia round" round>1) → al termine
+  //           serve la domanda. "over": la domanda è già arrivata (round 1 / rejoin) → al
+  //           termine chiude soltanto lo splash rivelando la domanda sottostante.
+  mode: "before" | "over";
+};
 
 export default function HostLobbyPage() {
   const { gameId } = useParams<{ gameId: string }>();
@@ -68,6 +82,11 @@ export default function HostLobbyPage() {
   const [categoryPickMode, setCategoryPickMode] = useState(false);
   const [categoryGrid, setCategoryGrid] = useState<CategoryGridData | null>(null);
   const [pickPending, setPickPending] = useState(false);
+  // Annuncio "Tocca a te" a tutto schermo prima della domanda.
+  const [announce, setAnnounce] = useState<AnnouncePlayer | null>(null);
+  const announcedQnRef = useRef<number | null>(null);
+  // Splash cambio round (categoria singola): nome categoria + jingle a tema.
+  const [splash, setSplash] = useState<SplashData | null>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem("hostCode");
@@ -128,6 +147,24 @@ export default function HostLobbyPage() {
     }
   }, [remaining, phase, question, timeUp]);
 
+  // Annuncio "Tocca a te": una volta per domanda, quando è noto il giocatore di turno
+  // (presentatore: activePlayerId; a-turni / "chi sceglie=chi risponde": turnPlayerId).
+  useEffect(() => {
+    if (phase !== "QUESTION" || !question) return;
+    const qn = question.questionNumber;
+    if (announcedQnRef.current === qn) return;
+    const turnId = activePlayerId ?? turnPlayerId;
+    if (!turnId) return; // FREE_FOR_ALL o turno non ancora risolto → nessun annuncio
+    const p = players.find((x) => x.id === turnId);
+    announcedQnRef.current = qn;
+    setAnnounce({
+      nickname: p?.nickname ?? turnPlayerNickname ?? "",
+      emoji: p?.emoji,
+      avatarUrl: p?.avatarUrl,
+    });
+    playSound("start");
+  }, [phase, question, activePlayerId, turnPlayerId, turnPlayerNickname, players]);
+
   // Rejoin via POST /api/game/[id]/snapshot (fase 7.4). Recupera anche duel:host-info.
   useEffect(() => {
     if (!gameId) return;
@@ -185,6 +222,8 @@ export default function HostLobbyPage() {
           setQuestion(s.currentQuestion);
           setTurnPlayerId(s.currentQuestion.turnPlayerId ?? null);
           setTurnPlayerNickname(s.currentQuestion.turnPlayerNickname ?? null);
+          // Ricongiungendosi a domanda in corso non riproporre l'annuncio a tutto schermo.
+          announcedQnRef.current = s.currentQuestion.questionNumber ?? null;
           setRemaining(s.remainingTime ?? s.currentQuestion.timeLimit);
           setReveal(null);
           setJudgeData(null);
@@ -224,7 +263,18 @@ export default function HostLobbyPage() {
       setRemaining(q.timeLimit);
       setLocalJudgments({});
       setLocalCorrectAnswer("");
+      // Azzera il giocatore di turno "presentatore": lo ripopola game:local-state con
+      // il valore per la NUOVA domanda, evitando che l'annuncio mostri quello vecchio.
+      setActivePlayerId(null);
       setCategoryGrid(null);
+      // Round 1 a categoria singola: non c'è il pulsante "Inizia round", quindi lo splash
+      // parte qui (mode "over": la domanda è già arrivata, resta sotto). Per i round >1 lo
+      // splash è già stato mostrato dal pulsante → qui chiudiamo quello eventuale.
+      if (q.roundIntro && q.questionNumber === 1) {
+        setSplash({ ...q.roundIntro, mode: "over" });
+      } else {
+        setSplash(null);
+      }
       setPhase("QUESTION");
     };
     // Modalità a turni: cambio del giocatore di turno (staffetta passOnWrong).
@@ -235,11 +285,13 @@ export default function HostLobbyPage() {
     };
     const onJeopardyGrid = (data: JeopardyGridData) => {
       setJeopardyGrid(data);
+      setSplash(null);
       setPhase("JEOPARDY_GRID");
     };
     const onCategoryGrid = (data: CategoryGridData) => {
       setCategoryGrid(data);
       setPickPending(false);
+      setSplash(null);
       setPhase("CATEGORY_PICK");
     };
     const onAnswerReceived = () => setAnsweredCount((c) => c + 1);
@@ -252,6 +304,9 @@ export default function HostLobbyPage() {
     };
     const onReveal = (data: RevealData) => {
       setReveal(data);
+      // Precarica l'eventuale MP3 della categoria del prossimo round: sarà pronto
+      // quando parte lo splash "Inizia round".
+      if (data.nextRound?.category) preloadCategoryJingle(data.nextRound.category.name);
       setPhase("REVEAL");
     };
     const onLeaderboard = ({ players }: { players: PlayerInfo[] }) => setPlayers(players);
@@ -334,6 +389,19 @@ export default function HostLobbyPage() {
   const endQuestion = () => postGame("/end-question");
   const pickCell = (gameQuestionId: string) => postGame("/jeopardy-pick", { gameQuestionId });
   const playAgain = () => router.push("/host");
+
+  // Avvio del round successivo. Se il prossimo round è a categoria singola, prima
+  // mostriamo lo splash animato (nome categoria + jingle) e SOLO al termine serviamo
+  // la prima domanda (così il timer non parte durante l'animazione). Lo splash viene
+  // poi chiuso dall'arrivo della domanda/griglia (onGameQuestion/on*Grid).
+  const startNextRound = () => {
+    const nr = reveal?.nextRound;
+    if (nr?.category) {
+      setSplash({ category: nr.category, roundNumber: nr.roundNumber, totalRounds: nr.totalRounds, modeLabel: nr.modeLabel, mode: "before" });
+      return;
+    }
+    nextQuestion();
+  };
 
   const addLocalPlayer = async () => {
     const name = addPlayerName.trim();
@@ -421,6 +489,23 @@ export default function HostLobbyPage() {
   };
 
   // === RENDER ===
+
+  // Splash cambio round (categoria singola): prevale su tutto.
+  // - mode "before" (pulsante "Inizia round", round >1): al termine serve la domanda;
+  //   lo splash resta finché la domanda non arriva (onGameQuestion lo chiude), senza flash.
+  // - mode "over" (round 1: la domanda è già arrivata): al termine chiude soltanto lo
+  //   splash, rivelando la domanda già caricata sotto.
+  if (splash) {
+    return (
+      <CategoryRevealSplash
+        category={splash.category}
+        roundNumber={splash.roundNumber}
+        totalRounds={splash.totalRounds}
+        modeLabel={splash.modeLabel}
+        onDone={splash.mode === "before" ? nextQuestion : () => setSplash(null)}
+      />
+    );
+  }
 
   // 100 Secondi: il duello prevale su qualsiasi fase
   if (duel && !duel.finished) {
@@ -827,6 +912,7 @@ export default function HostLobbyPage() {
 
     return (
       <main className="min-h-screen p-4 md:p-8">
+        {announce && <TurnAnnounce player={announce} onDone={() => setAnnounce(null)} />}
         {timeUp && (
           <div className="fixed inset-x-0 top-0 z-[60] flex justify-center pointer-events-none">
             <div className="mt-4 px-8 py-4 rounded-2xl bg-danger text-white text-2xl md:text-4xl font-extrabold shadow-2xl ring-4 ring-white/20 animate-pulse tracking-wide">
@@ -1051,6 +1137,7 @@ export default function HostLobbyPage() {
 
     return (
       <main className="min-h-screen p-4 md:p-8">
+        {announce && <TurnAnnounce player={announce} onDone={() => setAnnounce(null)} />}
         {timeUp && (
           <div className="fixed inset-x-0 top-0 z-[60] flex justify-center pointer-events-none">
             <div className="mt-4 px-8 py-4 rounded-2xl bg-danger text-white text-2xl md:text-4xl font-extrabold shadow-2xl ring-4 ring-white/20 animate-pulse tracking-wide">
@@ -1217,6 +1304,14 @@ export default function HostLobbyPage() {
               Round {reveal.nextRound.roundNumber} / {reveal.nextRound.totalRounds} ·
               prossima modalità: <span className="font-bold text-accent">{reveal.nextRound.modeLabel}</span>
             </p>
+            {reveal.nextRound.category && (
+              <p className="mt-2 text-lg font-semibold">
+                🎬 Categoria in arrivo:{" "}
+                <span style={{ color: reveal.nextRound.category.color ?? undefined }}>
+                  {reveal.nextRound.category.icon ?? "🏷️"} {reveal.nextRound.category.name}
+                </span>
+              </p>
+            )}
           </div>
 
           <div className="card mb-8">
@@ -1243,8 +1338,10 @@ export default function HostLobbyPage() {
             </div>
           </div>
 
-          <button onClick={nextQuestion} className="btn-primary w-full">
-            Inizia round {reveal.nextRound.roundNumber}: {reveal.nextRound.modeLabel}
+          <button onClick={startNextRound} className="btn-primary w-full">
+            {reveal.nextRound.category
+              ? `Inizia round ${reveal.nextRound.roundNumber}: ${reveal.nextRound.category.icon ?? "🏷️"} ${reveal.nextRound.category.name}`
+              : `Inizia round ${reveal.nextRound.roundNumber}: ${reveal.nextRound.modeLabel}`}
           </button>
         </div>
       </main>
