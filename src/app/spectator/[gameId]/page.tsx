@@ -14,6 +14,7 @@ import type {
 } from "@/types/socket";
 import MediaDisplay from "@/components/MediaDisplay";
 import TurnAnnounce, { type AnnouncePlayer } from "@/components/TurnAnnounce";
+import TurnResult, { type ResultPlayer } from "@/components/TurnResult";
 import CategoryRevealSplash from "@/components/CategoryRevealSplash";
 
 // Splash cambio round sul grande schermo spettatori (sempre "over": la domanda è già
@@ -49,6 +50,14 @@ export default function SpectatorViewerPage() {
   // Annuncio "Tocca a te" a tutto schermo prima della domanda.
   const [announce, setAnnounce] = useState<AnnouncePlayer | null>(null);
   const announcedQnRef = useRef<number | null>(null);
+  // Congela il cronometro mentre l'animazione "Tocca a te" è in corso.
+  const freezeTimerRef = useRef(false);
+  // Esito del turno appena giudicato (splash ✓/✗ + punti).
+  const [turnResult, setTurnResult] = useState<ResultPlayer | null>(null);
+  // Giudizi della domanda precedente (per capire chi è stato appena giudicato).
+  const prevJudgmentsRef = useRef<Record<string, boolean | null>>({});
+  // Lista giocatori sempre aggiornata per i listener Pusher (bound una sola volta).
+  const playersRef = useRef<PlayerInfo[]>([]);
   // Splash cambio round (categoria singola): nome categoria + jingle a tema.
   const [splash, setSplash] = useState<SpectatorSplash | null>(null);
 
@@ -59,6 +68,7 @@ export default function SpectatorViewerPage() {
     if (tickRef.current) clearInterval(tickRef.current);
     if (phase !== "QUESTION" || !question || question.timeLimit <= 0) return;
     tickRef.current = setInterval(() => {
+      if (freezeTimerRef.current) return; // durante l'animazione "Tocca a te" il timer è fermo
       setRemaining((r) => {
         const next = r > 0 ? r - 1 : 0;
         if (next > 0 && next <= 5) playSound("tick"); // tic-tac ultimi 5s sul grande schermo
@@ -74,13 +84,16 @@ export default function SpectatorViewerPage() {
   // sovrascrive `remaining` con il valore autoritativo. Speedrun idem.
   useEffect(() => {
     if (!tick) return;
-    if (tick.questionRemaining !== null && phase === "QUESTION") {
-      setRemaining(tick.questionRemaining);
+    // Durante l'animazione "Tocca a te" non sincronizzare: il timer resta pieno finché
+    // l'animazione non finisce (la deadline server include già l'intro, vedi game-actions).
+    if (tick.questionRemaining !== null && phase === "QUESTION" && !freezeTimerRef.current) {
+      const cap = question && question.timeLimit > 0 ? question.timeLimit : tick.questionRemaining;
+      setRemaining(Math.min(tick.questionRemaining, cap));
     }
     if (tick.speedrunRemaining !== speedrunRemaining) {
       setSpeedrunRemaining(tick.speedrunRemaining);
     }
-  }, [tick, phase, speedrunRemaining]);
+  }, [tick, phase, speedrunRemaining, question]);
 
   // Sirena + "TEMPO SCADUTO" sul grande schermo quando il countdown arriva a 0.
   useEffect(() => {
@@ -117,6 +130,16 @@ export default function SpectatorViewerPage() {
     playSound("start");
   }, [phase, question, activePlayerId, players]);
 
+  // Il cronometro è fermo finché l'animazione "Tocca a te" è visibile.
+  useEffect(() => {
+    freezeTimerRef.current = announce !== null;
+  }, [announce]);
+
+  // Mantieni playersRef aggiornato per i listener Pusher.
+  useEffect(() => {
+    playersRef.current = players;
+  }, [players]);
+
   // Rejoin: POST /api/spectator (fase 7.1) per recuperare lo snapshot iniziale.
   useEffect(() => {
     if (!gameId) return;
@@ -148,6 +171,8 @@ export default function SpectatorViewerPage() {
         if (s.localPartyMode) setLocalPartyMode(true);
         if (s.localState) setLocalJudgments(s.localState.judgments);
         if (s.localState) setActivePlayerId(s.localState.activePlayerId ?? null);
+        // Riallinea la baseline giudizi così il rejoin non fa comparire lo splash esito.
+        if (s.localState) prevJudgmentsRef.current = s.localState.judgments;
         if (s.categoryGrid) { setCategoryGrid(s.categoryGrid); setPhase("CATEGORY_PICK"); return; }
 
         if (s.gameStatus === "FINISHED") {
@@ -192,6 +217,9 @@ export default function SpectatorViewerPage() {
       setAnsweredPlayerIds(new Set());
       setRemaining(q.timeLimit);
       setLocalJudgments({});
+      // Nuova domanda: azzera esito e baseline giudizi.
+      setTurnResult(null);
+      prevJudgmentsRef.current = {};
       // Azzera il turno "presentatore": lo ripopola game:local-state con il valore per
       // la NUOVA domanda, così l'annuncio non mostra quello della domanda precedente.
       setActivePlayerId(null);
@@ -221,6 +249,28 @@ export default function SpectatorViewerPage() {
     };
     const onSpeedrunTimer = ({ remaining }: { remaining: number }) => setSpeedrunRemaining(remaining);
     const onLocalState = (s: LocalRoundState) => {
+      // Splash esito: trova il giocatore appena giudicato (da non-giudicato a ✓/✗).
+      const prev = prevJudgmentsRef.current;
+      let judgedId: string | null = null;
+      for (const [pid, val] of Object.entries(s.judgments)) {
+        if (val !== null && val !== undefined && (prev[pid] === null || prev[pid] === undefined)) {
+          judgedId = pid;
+          break;
+        }
+      }
+      prevJudgmentsRef.current = s.judgments;
+      if (judgedId) {
+        const correct = s.judgments[judgedId] === true;
+        const p = playersRef.current.find((x) => x.id === judgedId);
+        setTurnResult({
+          nickname: p?.nickname ?? "",
+          emoji: p?.emoji,
+          avatarUrl: p?.avatarUrl,
+          correct,
+          points: correct ? (s.questionPoints ?? 0) : 0,
+        });
+        playSound(correct ? "correct" : "wrong");
+      }
       setLocalJudgments(s.judgments);
       setActivePlayerId(s.activePlayerId ?? null);
     };
@@ -491,9 +541,12 @@ export default function SpectatorViewerPage() {
   }
 
   if (phase === "QUESTION" && question) {
+    // Il timer non supera mai il limite: durante l'intro (deadline + intro server) resta pieno.
+    const shownRemaining = question.timeLimit > 0 ? Math.min(remaining, question.timeLimit) : remaining;
     return (
       <main className="min-h-screen p-4 md:p-8">
         {announce && <TurnAnnounce player={announce} onDone={() => setAnnounce(null)} />}
+        {turnResult && <TurnResult player={turnResult} onDone={() => setTurnResult(null)} />}
         {timeUp && (
           <div className="fixed inset-x-0 top-0 z-[60] flex justify-center pointer-events-none">
             <div className="mt-4 px-10 py-5 rounded-2xl bg-danger text-white text-3xl md:text-5xl font-extrabold shadow-2xl ring-4 ring-white/20 animate-pulse tracking-wide">
@@ -533,7 +586,7 @@ export default function SpectatorViewerPage() {
               <div className="relative h-2 bg-surface rounded-full overflow-hidden mb-6">
                 <div
                   className="absolute inset-y-0 left-0 bg-accent transition-all duration-1000"
-                  style={{ width: `${(remaining / question.timeLimit) * 100}%` }}
+                  style={{ width: `${(shownRemaining / question.timeLimit) * 100}%` }}
                 />
               </div>
             )}
@@ -560,7 +613,7 @@ export default function SpectatorViewerPage() {
 
             <div className="text-center mb-8">
               <div className="text-7xl font-bold text-accent tabular-nums">
-                {question.timeLimit > 0 ? remaining : "—"}
+                {question.timeLimit > 0 ? shownRemaining : "—"}
               </div>
               <p className="text-muted mt-2 text-sm">
                 {localPartyMode

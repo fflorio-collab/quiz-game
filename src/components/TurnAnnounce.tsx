@@ -8,12 +8,16 @@ export type AnnouncePlayer = {
   avatarUrl?: string | null;
 };
 
+// Durata dell'animazione "Tocca a te". Il server aggiunge un intro ≥ di questo valore
+// alla deadline (vedi TURN_ANNOUNCE_SECS in game-actions) così il timer parte dopo.
+export const TURN_ANNOUNCE_MS = 2600;
+
 // Overlay a tutto schermo che annuncia chi deve rispondere ("Tocca a te!") prima
 // della domanda. Auto-scompare dopo `durationMs`, oppure al tocco/click.
 export default function TurnAnnounce({
   player,
   onDone,
-  durationMs = 2600,
+  durationMs = TURN_ANNOUNCE_MS,
 }: {
   player: AnnouncePlayer;
   onDone: () => void;

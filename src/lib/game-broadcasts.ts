@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { broadcastToGame, broadcastToHost } from "@/lib/pusher-server";
+import { resolveBasePoints } from "@/lib/scoring";
 
 // Helper di broadcast riusabili dalle API routes Next.js (migration vercel-pusher fase 7).
 // Replicano (con Pusher al posto di io.emit) le funzioni omonime di server/socket-server.ts
@@ -56,21 +57,36 @@ export async function broadcastLeaderboard(gameId: string): Promise<void> {
 // Modalità presentatore (localPartyMode): stato della domanda corrente con i giudizi
 // parziali dati dall'host (chi è stato giudicato e con che esito).
 export async function emitLocalRoundState(gameId: string, gameQuestionId: string): Promise<void> {
-  const [players, answers, game] = await Promise.all([
+  const [players, answers, game, gq] = await Promise.all([
     prisma.player.findMany({ where: { gameId }, select: { id: true } }),
     prisma.playerAnswer.findMany({ where: { gameQuestionId } }),
     prisma.game.findUnique({
       where: { id: gameId },
-      select: { localTurnPlayerId: true },
+      select: {
+        localTurnPlayerId: true,
+        pointsOverrides: true,
+        tournamentModes: true,
+        totalQuestions: true,
+        currentIndex: true,
+      },
+    }),
+    prisma.gameQuestion.findUnique({
+      where: { id: gameQuestionId },
+      select: { question: { select: { points: true } } },
     }),
   ]);
   const judgments: Record<string, boolean | null> = {};
   for (const p of players) judgments[p.id] = null;
   for (const a of answers) judgments[a.playerId] = a.isCorrect;
+  // Punti in palio per la domanda corrente (usati dallo splash "esatta/sbagliata").
+  const questionPoints = game && gq?.question
+    ? resolveBasePoints(game, gq.question.points)
+    : undefined;
   await broadcastToGame(gameId, "game:local-state", {
     gameQuestionId,
     judgments,
     activePlayerId: game?.localTurnPlayerId ?? null,
+    questionPoints,
   });
 }
 

@@ -284,6 +284,8 @@ export interface LocalRoundState {
   judgments: Record<string, boolean | null>;
   // Giocatore di turno (highlight): null = nessuno evidenziato
   activePlayerId?: string | null;
+  // Punti in palio per la domanda corrente (per lo splash "esatta/sbagliata" di fine turno)
+  questionPoints?: number;
 }
 
 // "Scegli categoria": griglia di categorie con numero di domande rimanenti

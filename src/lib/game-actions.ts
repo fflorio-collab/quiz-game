@@ -9,6 +9,14 @@ import { resolveTimeLimit, buildJudgeAnswersData, buildRevealDataFromDb, buildCa
 import { resolveTurnConfig, parseActiveTurnOrder, turnPlayerId, questionSeq, resolveRoundLayout } from "@/lib/turn";
 import type { QuestionType } from "@/types/socket";
 
+// Ri-esporto per retro-compatibilità: le route importano resolveBasePoints da qui.
+export { resolveBasePoints } from "@/lib/scoring";
+
+// Secondi di "intro" aggiunti alla deadline in modalità presentatore, così il
+// cronometro sul grande schermo inizia a scorrere solo DOPO l'animazione "Tocca a te".
+// Deve essere ≥ della durata dell'animazione lato client (TurnAnnounce ~2.6s).
+const TURN_ANNOUNCE_SECS = 3;
+
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -25,25 +33,6 @@ function resolveCorrectAnswerText(question: {
 }): string {
   const correct = question.answers.find((a) => a.isCorrect);
   return correct?.text ?? question.openAnswer ?? "";
-}
-
-// Risolve i punti base per la domanda corrente: pointsOverrides per-round (torneo)
-// se presente e > 0, altrimenti il default della Question.
-export function resolveBasePoints(
-  game: { pointsOverrides: string | null; tournamentModes: string | null; totalQuestions: number; currentIndex: number },
-  questionDefault: number,
-): number {
-  if (!game.pointsOverrides) return questionDefault;
-  const values = game.pointsOverrides.split(",").map((n) => Number(n));
-  const modes = game.tournamentModes ? game.tournamentModes.split(",") : null;
-  if (!modes || modes.length <= 1) {
-    const v = values[0];
-    return v && v > 0 ? v : questionDefault;
-  }
-  const perRound = Math.max(1, Math.floor(game.totalQuestions / modes.length));
-  const roundIdx = Math.min(modes.length - 1, Math.floor(game.currentIndex / perRound));
-  const v = values[roundIdx];
-  return v && v > 0 ? v : questionDefault;
 }
 
 // Azioni "macro" sulla partita richiamabili sia da API routes Next.js sia
@@ -223,13 +212,18 @@ export async function sendNextQuestion(gameId: string): Promise<void> {
 
   await clearRevealDb(gameId);
   await clearJudgingDb(gameId);
-  // Persisti deadline (effectiveTimeLimit<=0 = senza limite manuale, no deadline)
+  // Persisti deadline (effectiveTimeLimit<=0 = senza limite manuale, no deadline).
+  // In presentatore aggiungo un "intro" pari all'animazione "Tocca a te": il cronometro
+  // sul grande schermo (spettatore) resta pieno finché l'animazione non finisce, poi parte.
+  // Solo presentatore: non ha dispositivi giocatore e non ha auto-fine (handleTurnDeadline
+  // esce subito) → nessun impatto su fairness/timer dei player.
+  const introSecs = game.localPartyMode ? TURN_ANNOUNCE_SECS : 0;
   await prisma.game.update({
     where: { id: gameId },
     data: {
       awaitingCategoryPick: false,
       currentQuestionDeadline:
-        effectiveTimeLimit > 0 ? new Date(Date.now() + effectiveTimeLimit * 1000) : null,
+        effectiveTimeLimit > 0 ? new Date(Date.now() + (effectiveTimeLimit + introSecs) * 1000) : null,
     },
   });
 
